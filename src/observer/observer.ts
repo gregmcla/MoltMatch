@@ -40,14 +40,14 @@ export interface ProcessingResult {
 export class Observer {
   private client: MoltbookClient;
   private db: MatchmakerDatabase;
-  private vectorStore: VectorStore;
+  private vectorStore: VectorStore | null;
   private extractor: CapabilityExtractor;
   private config: ObserverConfig;
 
   constructor(
     client: MoltbookClient,
     db: MatchmakerDatabase,
-    vectorStore: VectorStore,
+    vectorStore: VectorStore | null,
     extractor: CapabilityExtractor,
     config: ObserverConfig
   ) {
@@ -179,15 +179,17 @@ export class Observer {
             signal.evidence
           );
 
-          const embedding = embedCapability(signal.domain, description, signal.signalType);
-
-          await this.vectorStore.upsertCapability(
-            post.author_id,
-            signal.domain,
-            signal.confidence,
-            description,
-            embedding
-          );
+          // Add to vector store if available
+          if (this.vectorStore) {
+            const embedding = embedCapability(signal.domain, description, signal.signalType);
+            await this.vectorStore.upsertCapability(
+              post.author_id,
+              signal.domain,
+              signal.confidence,
+              description,
+              embedding
+            );
+          }
         } else {
           // Create capability gap
           const gap = await this.createGap(post, signal);
@@ -287,15 +289,17 @@ export class Observer {
       status: 'open',
     });
 
-    // Add to vector store for semantic matching
-    const embedding = embedGap(signal.domain, signal.evidence);
-    await this.vectorStore.addGap(
-      gapId,
-      post.author_id,
-      signal.domain,
-      signal.evidence,
-      embedding
-    );
+    // Add to vector store for semantic matching (if available)
+    if (this.vectorStore) {
+      const embedding = embedGap(signal.domain, signal.evidence);
+      await this.vectorStore.addGap(
+        gapId,
+        post.author_id,
+        signal.domain,
+        signal.evidence,
+        embedding
+      );
+    }
 
     logger.debug('gap_created', {
       gapId,
@@ -350,8 +354,10 @@ export class Observer {
   private async handleExclusionRequest(post: MoltbookPost): Promise<void> {
     this.db.setAgentExcluded(post.author_id, true);
 
-    // Remove from vector store
-    await this.vectorStore.deleteAgentCapabilities(post.author_id);
+    // Remove from vector store (if available)
+    if (this.vectorStore) {
+      await this.vectorStore.deleteAgentCapabilities(post.author_id);
+    }
 
     logger.info('agent_excluded', { agentId: post.author_id });
   }

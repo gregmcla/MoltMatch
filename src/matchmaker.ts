@@ -42,15 +42,16 @@ export interface HeartbeatResult {
 
 export class Matchmaker {
   private db: MatchmakerDatabase;
-  private vectorStore: VectorStore;
+  private vectorStore: VectorStore | null = null;
   private client: MoltbookClient;
   private extractor: CapabilityExtractor;
-  private observer: Observer;
-  private matcher: Matcher;
+  private observer: Observer | null = null;
+  private matcher: Matcher | null = null;
   private rateLimiter: RateLimiter;
   private publisher: Publisher;
   private templateEngine: TemplateEngine;
   private initialized = false;
+  private vectorStoreEnabled = false;
 
   constructor() {
     // Set log level
@@ -61,7 +62,6 @@ export class Matchmaker {
 
     // Initialize components
     this.db = new MatchmakerDatabase(config.database.sqlitePath);
-    this.vectorStore = new VectorStore(config.database.chromaPath);
 
     this.client = new MoltbookClient({
       apiKey: config.moltbook.apiKey,
@@ -72,23 +72,6 @@ export class Matchmaker {
 
     this.templateEngine = new TemplateEngine();
     this.rateLimiter = new RateLimiter(this.db);
-
-    this.observer = new Observer(
-      this.client,
-      this.db,
-      this.vectorStore,
-      this.extractor,
-      {
-        targetSubmolts: config.targetSubmolts,
-        postsPerSubmolt: 25,
-      }
-    );
-
-    this.matcher = new Matcher(this.db, this.vectorStore, {
-      minConfidence: config.matching.minConfidence,
-      maxMatchesPerCycle: config.matching.maxMatchesPerCycle,
-      weights: config.matching.weights,
-    });
 
     this.publisher = new Publisher(
       this.client,
@@ -109,8 +92,38 @@ export class Matchmaker {
     // Initialize database
     this.db.initialize();
 
-    // Initialize vector store
-    await this.vectorStore.initialize();
+    // Try to initialize vector store (optional - continues without it)
+    try {
+      this.vectorStore = new VectorStore(config.database.chromaPath);
+      await this.vectorStore.initialize();
+      this.vectorStoreEnabled = true;
+      logger.info('vector_store_enabled');
+    } catch (error) {
+      logger.warn('vector_store_disabled', {
+        reason: 'ChromaDB not available - running without semantic search',
+        error: (error as Error).message
+      });
+      this.vectorStore = null;
+      this.vectorStoreEnabled = false;
+    }
+
+    // Initialize observer and matcher (with or without vector store)
+    this.observer = new Observer(
+      this.client,
+      this.db,
+      this.vectorStore,
+      this.extractor,
+      {
+        targetSubmolts: config.targetSubmolts,
+        postsPerSubmolt: 25,
+      }
+    );
+
+    this.matcher = new Matcher(this.db, this.vectorStore, {
+      minConfidence: config.matching.minConfidence,
+      maxMatchesPerCycle: config.matching.maxMatchesPerCycle,
+      weights: config.matching.weights,
+    });
 
     // Verify API connection
     const healthy = await this.client.healthCheck();
@@ -119,7 +132,7 @@ export class Matchmaker {
     }
 
     this.initialized = true;
-    logger.info('matchmaker_initialized');
+    logger.info('matchmaker_initialized', { vectorStoreEnabled: this.vectorStoreEnabled });
   }
 
   /**

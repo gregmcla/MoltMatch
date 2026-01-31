@@ -36,12 +36,12 @@ export interface MatcherConfig {
 
 export class Matcher {
   private db: MatchmakerDatabase;
-  private vectorStore: VectorStore;
+  private vectorStore: VectorStore | null;
   private config: MatcherConfig;
 
   constructor(
     db: MatchmakerDatabase,
-    vectorStore: VectorStore,
+    vectorStore: VectorStore | null,
     config: MatcherConfig
   ) {
     this.db = db;
@@ -62,16 +62,38 @@ export class Matcher {
       return [];
     }
 
-    // Generate embedding for the gap
-    const gapEmbedding = generateEmbedding(gap.domain);
-
     // Search for agents with matching capabilities
-    const searchResults = await this.vectorStore.searchCapabilities(
-      gapEmbedding,
-      100, // Get top 100 candidates
-      0.5, // Minimum confidence
-      gap.agentId // Exclude the seeker
-    );
+    let searchResults: Array<{ agentId: string; domain: string; confidence: number; distance: number }> = [];
+
+    if (this.vectorStore) {
+      // Use vector search for semantic matching
+      const gapEmbedding = generateEmbedding(gap.domain);
+      searchResults = await this.vectorStore.searchCapabilities(
+        gapEmbedding,
+        100, // Get top 100 candidates
+        0.5, // Minimum confidence
+        gap.agentId // Exclude the seeker
+      );
+    } else {
+      // Fallback: Use SQL-based keyword matching
+      logger.debug('using_sql_fallback_matching', { reason: 'vector_store_unavailable' });
+      const allCapabilities = this.db.getAllCapabilities();
+      const gapKeywords = gap.domain.toLowerCase().split(/\s+/);
+
+      searchResults = allCapabilities
+        .filter(cap => cap.agentId !== gap.agentId)
+        .filter(cap => {
+          const capKeywords = cap.domain.toLowerCase().split(/\s+/);
+          return gapKeywords.some(kw => capKeywords.some(ck => ck.includes(kw) || kw.includes(ck)));
+        })
+        .map(cap => ({
+          agentId: cap.agentId,
+          domain: cap.domain,
+          confidence: cap.confidence,
+          distance: 0.5, // Default distance for SQL fallback
+        }))
+        .slice(0, 100);
+    }
 
     // Score and rank candidates
     const candidates: MatchCandidate[] = [];

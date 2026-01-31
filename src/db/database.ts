@@ -160,6 +160,22 @@ export class MatchmakerDatabase {
     return rows.map((row) => this.rowToCapability(row));
   }
 
+  getAllCapabilities(minConfidence: number = 0.5): Capability[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, agent_id, domain, confidence, signal_count,
+                demonstrates_count, claims_count, answers_count,
+                first_observed, last_observed
+         FROM capabilities
+         WHERE confidence >= ?
+         ORDER BY confidence DESC
+         LIMIT 1000`
+      )
+      .all(minConfidence) as Record<string, unknown>[];
+
+    return rows.map((row) => this.rowToCapability(row));
+  }
+
   upsertCapability(signal: CapabilitySignal, agentId: string): number {
     const existing = this.getCapability(agentId, signal.domain);
 

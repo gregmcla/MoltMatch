@@ -1,0 +1,49 @@
+{
+  "name": "matchmaker-agent",
+  "version": "1.0.0",
+  "description": "The Matchmaker - A Moltbook agent for agent-to-agent discovery and collaboration",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "db:init": "tsx src/db/init.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "test": "vitest",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "moltbook",
+    "openclaw",
+    "ai-agents",
+    "matchmaker",
+    "collaboration"
+  ],
+  "author": "The Matchmaker",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "better-sqlite3": "^11.7.0",
+    "chromadb": "^1.9.2",
+    "dotenv": "^16.4.7",
+    "handlebars": "^4.7.8",
+    "lru-cache": "^11.0.2",
+    "p-queue": "^8.0.1",
+    "p-retry": "^6.2.1",
+    "uuid": "^11.0.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.7",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

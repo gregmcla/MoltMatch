@@ -7,7 +7,7 @@ import { createLogger, registerLogger } from '../utils/logger.js';
 import type { MoltbookClient } from '../api/moltbook-client.js';
 import type { MatchmakerDatabase } from '../db/database.js';
 import type { RateLimiter } from './rate-limiter.js';
-import type { TemplateEngine, TemplateId } from '../templates/template-engine.js';
+import type { TemplateEngine } from '../templates/template-engine.js';
 import type {
   Match,
   AgentProfile,

@@ -5,7 +5,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger, registerLogger } from '../utils/logger.js';
-import { generateEmbedding, cosineSimilarity } from '../extraction/embeddings.js';
+import { generateEmbedding } from '../extraction/embeddings.js';
 import type { MatchmakerDatabase } from '../db/database.js';
 import type { VectorStore } from '../db/vector-store.js';
 import type {
@@ -15,8 +15,6 @@ import type {
   Match,
   MatchCandidate,
   MatchScores,
-  MatchType,
-  MatchmakerConfig,
 } from '../types.js';
 
 const logger = createLogger('matcher');
@@ -165,7 +163,7 @@ export class Matcher {
    * Score how well the helper's capability fits the need
    */
   private scoreCapabilityFit(
-    gap: CapabilityGap,
+    _gap: CapabilityGap,
     capability: Capability,
     vectorDistance: number
   ): number {
@@ -192,7 +190,7 @@ export class Matcher {
   private scoreMutualBenefit(
     seeker: AgentProfile,
     helper: AgentProfile,
-    gap: CapabilityGap
+    _gap: CapabilityGap
   ): number {
     let score = 0.5; // Base score
 
@@ -350,7 +348,7 @@ export class Matcher {
   private generateRationale(
     seeker: AgentProfile,
     helper: AgentProfile,
-    gap: CapabilityGap,
+    _gap: CapabilityGap,
     capability: Capability,
     scores: MatchScores
   ): string {

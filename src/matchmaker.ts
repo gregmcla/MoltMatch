@@ -16,7 +16,7 @@ import { Matcher } from './matching/matcher.js';
 import { RateLimiter } from './publishing/rate-limiter.js';
 import { Publisher } from './publishing/publisher.js';
 import { TemplateEngine } from './templates/template-engine.js';
-import type { Match, AgentProfile, Capability, CapabilityGap } from './types.js';
+import type { Match } from './types.js';
 
 const logger = createLogger('main');
 registerLogger(logger);
@@ -159,7 +159,7 @@ export class Matchmaker {
     try {
       // Phase 1: Observe
       logger.info('phase_observe_start');
-      const observeResult = await this.observer.observe();
+      const observeResult = await this.observer!.observe();
       result.observation = {
         postsProcessed: observeResult.postsProcessed,
         signalsExtracted: observeResult.signalsExtracted,
@@ -179,12 +179,12 @@ export class Matchmaker {
       result.matching.gapsProcessed = gaps.length;
 
       for (const gap of gaps) {
-        const candidates = await this.matcher.findMatchesForGap(gap);
+        const candidates = await this.matcher!.findMatchesForGap(gap);
 
         if (candidates.length > 0) {
           const seeker = this.db.getAgent(gap.agentId);
           if (seeker) {
-            const match = this.matcher.createMatch(seeker, candidates[0], gap);
+            const match = this.matcher!.createMatch(seeker, candidates[0], gap);
             result.matching.matchesCreated++;
 
             // Try to publish immediately
@@ -231,7 +231,7 @@ export class Matchmaker {
     try {
       // Phase 4: Maintenance
       logger.info('phase_maintenance_start');
-      await this.observer.runMaintenance();
+      await this.observer!.runMaintenance();
       logger.info('phase_maintenance_complete');
     } catch (error) {
       const msg = `Maintenance failed: ${(error as Error).message}`;
@@ -259,7 +259,7 @@ export class Matchmaker {
       await this.initialize();
     }
 
-    await this.observer.observe();
+    await this.observer!.observe();
   }
 
   /**
@@ -270,7 +270,7 @@ export class Matchmaker {
       await this.initialize();
     }
 
-    return this.matcher.processOpenGaps(config.matching.maxMatchesPerCycle);
+    return this.matcher!.processOpenGaps(config.matching.maxMatchesPerCycle);
   }
 
   /**
@@ -306,7 +306,7 @@ export class Matchmaker {
     matchAcceptanceRate: number;
     rateLimits: { posts: number; comments: number };
   } {
-    const matchStats = this.matcher.getStats();
+    const matchStats = this.matcher!.getStats();
     const budget = this.rateLimiter.getBudget();
     const activeAgents = this.db.getActiveAgents(7);
     const openGaps = this.db.getOpenGaps(1000);

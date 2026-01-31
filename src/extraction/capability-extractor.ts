@@ -75,7 +75,7 @@ export class CapabilityExtractor {
     try {
       // Build the prompt
       const prompt = EXTRACTION_PROMPT
-        .replace('{{author}}', post.author_name)
+        .replace('{{author}}', post.author_name || post.author_id)
         .replace('{{title}}', post.title)
         .replace('{{content}}', post.content);
 

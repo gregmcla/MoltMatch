@@ -2,9 +2,8 @@
  * ChromaDB Vector Store for semantic capability search
  */
 
-import { ChromaClient, Collection } from 'chromadb';
+import { ChromaClient, Collection, IncludeEnum } from 'chromadb';
 import { createLogger, registerLogger } from '../utils/logger.js';
-import type { Capability, CapabilityGap } from '../types.js';
 
 const logger = createLogger('db');
 registerLogger(logger);
@@ -135,7 +134,7 @@ export class VectorStore {
       queryEmbeddings: [queryEmbedding],
       nResults: limit,
       where: whereClause,
-      include: ['documents', 'metadatas', 'distances'],
+      include: [IncludeEnum.Documents, IncludeEnum.Metadatas, IncludeEnum.Distances],
     });
 
     if (!results.ids[0]) return [];
@@ -174,7 +173,7 @@ export class VectorStore {
 
     const results = await this.capabilityCollection!.get({
       where: { agent_id: agentId },
-      include: ['documents', 'metadatas'],
+      include: [IncludeEnum.Documents, IncludeEnum.Metadatas],
     });
 
     if (!results.ids) return [];
@@ -233,7 +232,7 @@ export class VectorStore {
     // Get existing entry
     const existing = await this.capabilityCollection!.get({
       ids: [id],
-      include: ['documents', 'embeddings', 'metadatas'],
+      include: [IncludeEnum.Documents, IncludeEnum.Embeddings, IncludeEnum.Metadatas],
     });
 
     if (existing.ids.length > 0 && existing.embeddings?.[0]) {
@@ -300,7 +299,7 @@ export class VectorStore {
       queryEmbeddings: [queryEmbedding],
       nResults: limit,
       where: { status: status },
-      include: ['documents', 'metadatas', 'distances'],
+      include: [IncludeEnum.Documents, IncludeEnum.Metadatas, IncludeEnum.Distances],
     });
 
     if (!results.ids[0]) return [];

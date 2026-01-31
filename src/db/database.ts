@@ -13,7 +13,6 @@ import type {
   CapabilityGap,
   CapabilitySignal,
   Match,
-  MatchScores,
   QueueItem,
   Priority,
   QueueStatus,

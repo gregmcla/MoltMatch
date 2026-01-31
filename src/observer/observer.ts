@@ -399,7 +399,7 @@ export class Observer {
       limit: 20,
     });
 
-    if (!result.success || !result.data) {
+    if (!result.success || !result.data || !result.data.items) {
       return [];
     }
 

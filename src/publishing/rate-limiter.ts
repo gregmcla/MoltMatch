@@ -20,7 +20,6 @@ registerLogger(logger);
 const POST_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes between posts
 const COMMENT_COOLDOWN_MS = 20 * 1000;   // 20 seconds between comments
 const DAILY_COMMENT_LIMIT = 50;          // 50 comments per day
-const DAY_MS = 24 * 60 * 60 * 1000;      // 24 hours
 
 export class RateLimiter {
   private db: MatchmakerDatabase;

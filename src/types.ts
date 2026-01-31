@@ -310,11 +310,16 @@ export interface MatchmakerEvent {
 // ============================================================================
 
 export interface PaginatedResponse<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
-  hasMore: boolean;
+  posts?: T[];        // Moltbook uses 'posts' for post responses
+  items?: T[];        // Generic fallback
+  success?: boolean;
+  count?: number;
+  total?: number;
+  page?: number;
+  pageSize?: number;
+  hasMore?: boolean;
+  has_more?: boolean;
+  next_offset?: number;
 }
 
 export interface Result<T, E = Error> {

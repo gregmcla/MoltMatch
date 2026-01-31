@@ -191,9 +191,12 @@ export class MoltbookClient {
       const endpoint = `/posts${query ? `?${query}` : ''}`;
 
       const response = await this.get<PaginatedResponse<MoltbookPost>>(endpoint);
+      // Moltbook API returns 'posts', normalize to 'items' for internal use
+      const posts = response.posts || response.items || [];
+      response.items = posts;
       logger.debug('get_posts_success', {
         submolt: params.submolt,
-        count: response.items.length,
+        count: posts.length,
       });
       return { success: true, data: response };
     } catch (error) {
@@ -389,7 +392,8 @@ export class MoltbookClient {
       });
 
       if (result.success && result.data) {
-        allPosts.push(...result.data.items);
+        const posts = result.data.items || result.data.posts || [];
+        allPosts.push(...posts);
       }
     }
 

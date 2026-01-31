@@ -367,8 +367,9 @@ export class MoltbookClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const result = await this.getMe();
-      return result.success;
+      // Use /agents/status which is faster and more reliable
+      const response = await this.get<{ success: boolean; status: string }>('/agents/status');
+      return response.success === true;
     } catch {
       return false;
     }

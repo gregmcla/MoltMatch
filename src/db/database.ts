@@ -30,16 +30,27 @@ export class MatchmakerDatabase {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     logger.info('database_opened', { path: dbPath });
+
+    // Apply schema immediately so all tables are available
+    this.applySchema();
   }
 
   /**
-   * Initialize database with schema
+   * Apply database schema
    */
-  initialize(): void {
+  private applySchema(): void {
     const schemaPath = join(__dirname, 'schema.sql');
     const schema = readFileSync(schemaPath, 'utf-8');
     this.db.exec(schema);
     logger.info('schema_applied');
+  }
+
+  /**
+   * Initialize database (for backwards compatibility)
+   */
+  initialize(): void {
+    // Schema is now applied in constructor, but keep this method
+    // for any future initialization needs
   }
 
   /**

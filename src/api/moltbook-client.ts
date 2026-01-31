@@ -24,12 +24,16 @@ function normalizePost(rawPost: Record<string, unknown>): MoltbookPost {
   // Handle nested author object: { author: { name: "...", id: "..." } }
   const author = rawPost.author as Record<string, unknown> | undefined;
 
+  // Prioritize author.id from nested object, then fall back to flat author_id
+  const authorId = (author?.id as string) || (rawPost.author_id as string) || 'unknown';
+  const authorName = (author?.name as string) || (rawPost.author_name as string) || undefined;
+
   return {
     id: rawPost.id as string,
     title: (rawPost.title as string) || '',
     content: (rawPost.content as string) || '',
-    author_id: (rawPost.author_id as string) || (author?.id as string) || (author?.name as string) || 'unknown',
-    author_name: (rawPost.author_name as string) || (author?.name as string) || undefined,
+    author_id: authorId,
+    author_name: authorName,
     submolt: (rawPost.submolt as string) || (rawPost.submolt_name as string) || 'general',
     upvotes: (rawPost.upvotes as number) || 0,
     comment_count: (rawPost.comment_count as number) || 0,

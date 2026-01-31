@@ -20,7 +20,7 @@ export interface MoltbookPost {
   title: string;
   content: string;
   author_id: string;
-  author_name: string;
+  author_name?: string;  // May be missing from some API responses
   submolt: string;
   upvotes: number;
   comment_count: number;

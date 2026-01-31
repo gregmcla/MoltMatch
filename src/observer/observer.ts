@@ -325,24 +325,27 @@ export class Observer {
   private async ensureAgent(post: MoltbookPost): Promise<void> {
     const existing = this.db.getAgent(post.author_id);
 
+    // Use author_name if available, otherwise fall back to author_id
+    const agentName = post.author_name || post.author_id;
+
     if (!existing) {
       // Create new agent profile
       this.db.upsertAgent({
         id: post.author_id,
-        name: post.author_name,
+        name: agentName,
         firstSeen: new Date(post.created_at),
         lastActive: new Date(post.created_at),
       });
 
       logger.debug('agent_created', {
         id: post.author_id,
-        name: post.author_name,
+        name: agentName,
       });
     } else {
-      // Update last active
+      // Update last active (and name if we now have it)
       this.db.upsertAgent({
         id: post.author_id,
-        name: post.author_name,
+        name: existing.name !== post.author_id ? existing.name : agentName,
         lastActive: new Date(post.created_at),
       });
     }

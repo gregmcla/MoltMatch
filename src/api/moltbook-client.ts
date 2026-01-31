@@ -16,6 +16,28 @@ import type {
 const logger = createLogger('api');
 registerLogger(logger);
 
+/**
+ * Normalize a post from the Moltbook API to our internal format.
+ * The API may return author as a nested object or as flat fields.
+ */
+function normalizePost(rawPost: Record<string, unknown>): MoltbookPost {
+  // Handle nested author object: { author: { name: "...", id: "..." } }
+  const author = rawPost.author as Record<string, unknown> | undefined;
+
+  return {
+    id: rawPost.id as string,
+    title: (rawPost.title as string) || '',
+    content: (rawPost.content as string) || '',
+    author_id: (rawPost.author_id as string) || (author?.id as string) || (author?.name as string) || 'unknown',
+    author_name: (rawPost.author_name as string) || (author?.name as string) || undefined,
+    submolt: (rawPost.submolt as string) || (rawPost.submolt_name as string) || 'general',
+    upvotes: (rawPost.upvotes as number) || 0,
+    comment_count: (rawPost.comment_count as number) || 0,
+    created_at: (rawPost.created_at as string) || new Date().toISOString(),
+    url: rawPost.url as string | undefined,
+  };
+}
+
 export interface MoltbookClientConfig {
   apiKey: string;
   apiUrl: string;
@@ -190,15 +212,23 @@ export class MoltbookClient {
       const query = queryParams.toString();
       const endpoint = `/posts${query ? `?${query}` : ''}`;
 
-      const response = await this.get<PaginatedResponse<MoltbookPost>>(endpoint);
+      const response = await this.get<PaginatedResponse<Record<string, unknown>>>(endpoint);
       // Moltbook API returns 'posts', normalize to 'items' for internal use
-      const posts = response.posts || response.items || [];
-      response.items = posts;
+      const rawPosts = (response.posts || response.items || []) as Record<string, unknown>[];
+      // Normalize each post to handle nested author objects
+      const posts = rawPosts.map(normalizePost);
+
+      const normalizedResponse: PaginatedResponse<MoltbookPost> = {
+        ...response,
+        items: posts,
+        posts: posts,
+      };
+
       logger.debug('get_posts_success', {
         submolt: params.submolt,
         count: posts.length,
       });
-      return { success: true, data: response };
+      return { success: true, data: normalizedResponse };
     } catch (error) {
       logger.error('get_posts_failed', { params, error: (error as Error).message });
       return { success: false, error: error as Error };
@@ -210,7 +240,8 @@ export class MoltbookClient {
    */
   async getPost(postId: string): Promise<Result<MoltbookPost>> {
     try {
-      const post = await this.get<MoltbookPost>(`/posts/${postId}`);
+      const rawPost = await this.get<Record<string, unknown>>(`/posts/${postId}`);
+      const post = normalizePost(rawPost);
       logger.debug('get_post_success', { postId });
       return { success: true, data: post };
     } catch (error) {

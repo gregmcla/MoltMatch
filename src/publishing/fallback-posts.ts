@@ -101,13 +101,15 @@ Generate a thoughtful, substantive post that fits one of these categories (pick 
 - End with precision — find the exact sentence that captures your point, then stop.
 - Use markdown formatting for readability (headers, bullet points, emphasis where appropriate).
 
-Return JSON:
+Return valid JSON (escape quotes with \\" and newlines with \\n inside strings):
 {
   "type": "capability_spotlight|pattern_observation|interesting_find|community_question|quiet_reflection",
   "title": "Compelling title that captures the core idea (under 80 chars)",
-  "content": "The full post body with markdown formatting",
+  "content": "The full post body with markdown formatting. Use \\n for newlines. Escape any quotes with backslash.",
   "submolt": "aithoughts"
-}`;
+}
+
+IMPORTANT: The JSON must be valid. Escape all quotes inside string values with \\". Use \\n for newlines.`;
 
 export class FallbackPostGenerator {
   private anthropic: Anthropic;
@@ -214,10 +216,18 @@ export class FallbackPostGenerator {
     } catch (error) {
       logger.warn('fallback_post_parse_failed', {
         error: (error as Error).message,
+        rawLength: text.length,
+        rawPreview: text.slice(0, 200),
       });
 
       // Fallback: try to extract fields manually
-      return this.extractFieldsManually(text);
+      const manual = this.extractFieldsManually(text);
+      if (!manual) {
+        logger.error('fallback_post_extraction_failed', {
+          rawText: text.slice(0, 500),
+        });
+      }
+      return manual;
     }
   }
 
@@ -290,8 +300,11 @@ export class FallbackPostGenerator {
       const titleMatch = text.match(/"title"\s*:\s*"([^"]+)"/);
       const title = titleMatch?.[1];
 
-      // Try to extract content - this is the tricky one with newlines
-      // Look for "content": " and find the closing "
+      // Try to extract submolt first (we'll use its position to find content end)
+      const submoltMatch = text.match(/"submolt"\s*:\s*"([^"]+)"/);
+      const submolt = submoltMatch?.[1] || 'aithoughts';
+
+      // Try to extract content - find start and look for submolt field or closing brace
       const contentStart = text.indexOf('"content"');
       if (contentStart === -1) return null;
 
@@ -301,25 +314,46 @@ export class FallbackPostGenerator {
       const quoteStart = text.indexOf('"', colonPos + 1);
       if (quoteStart === -1) return null;
 
-      // Find the end quote (not escaped)
-      let quoteEnd = quoteStart + 1;
-      while (quoteEnd < text.length) {
-        if (text[quoteEnd] === '"' && text[quoteEnd - 1] !== '\\') {
-          break;
+      // Find where content ends by looking for the pattern that follows it
+      // Either "submolt" field or end of JSON object
+      let contentEndMarker = text.indexOf('",\n', quoteStart + 1);
+      if (contentEndMarker === -1) {
+        contentEndMarker = text.indexOf('"\n}', quoteStart + 1);
+      }
+      if (contentEndMarker === -1) {
+        // Last resort: find "submolt" and work backwards
+        const submoltPos = text.indexOf('"submolt"', quoteStart);
+        if (submoltPos !== -1) {
+          // Find the quote before submolt
+          contentEndMarker = text.lastIndexOf('"', submoltPos - 1);
         }
-        quoteEnd++;
+      }
+      if (contentEndMarker === -1) {
+        // Very last resort: find closing brace and work backwards
+        const closeBrace = text.lastIndexOf('}');
+        if (closeBrace !== -1) {
+          contentEndMarker = text.lastIndexOf('"', closeBrace);
+        }
       }
 
-      let content = text.slice(quoteStart + 1, quoteEnd);
+      if (contentEndMarker === -1 || contentEndMarker <= quoteStart) {
+        return null;
+      }
+
+      let content = text.slice(quoteStart + 1, contentEndMarker);
       // Unescape the content
-      content = content.replace(/\\n/g, '\n').replace(/\\"/g, '"');
+      content = content
+        .replace(/\\n/g, '\n')
+        .replace(/\\"/g, '"')
+        .replace(/\\t/g, '\t')
+        .replace(/\\\\/g, '\\');
 
-      // Try to extract submolt
-      const submoltMatch = text.match(/"submolt"\s*:\s*"([^"]+)"/);
-      const submolt = submoltMatch?.[1] || 'aithoughts';
-
-      if (type && title && content) {
-        logger.info('fallback_post_extracted_manually', { type, titleLength: title.length });
+      if (type && title && content && content.length > 50) {
+        logger.info('fallback_post_extracted_manually', {
+          type,
+          titleLength: title.length,
+          contentLength: content.length
+        });
         return {
           type,
           title: title.slice(0, 80),

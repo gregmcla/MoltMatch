@@ -7,7 +7,7 @@
 
 import { Matchmaker } from './matchmaker.js';
 
-const COMMANDS = ['heartbeat', 'observe', 'match', 'publish', 'digest', 'stats', 'help'];
+const COMMANDS = ['heartbeat', 'observe', 'match', 'publish', 'digest', 'stats', 'reflect', 'consolidate', 'learning', 'help'];
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -84,6 +84,53 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'reflect': {
+        console.log('Forcing reflection...');
+        const reflection = await matchmaker.forceReflect();
+        if (reflection) {
+          console.log(`Reflection created: ${reflection.id}`);
+          console.log(`Summary: ${reflection.summary}`);
+          console.log(`Patterns observed: ${reflection.patternObservations.length}`);
+          console.log(`Tags: ${reflection.tags.join(', ')}`);
+        } else {
+          console.log('Learning system not enabled.');
+        }
+        break;
+      }
+
+      case 'consolidate': {
+        console.log('Forcing consolidation...');
+        const result = await matchmaker.forceConsolidate();
+        if (result) {
+          console.log(`Consolidation complete:`);
+          console.log(`  New insights: ${result.newInsights.length}`);
+          console.log(`  Strengthened: ${result.strengthenInsights.length}`);
+          console.log(`  Weakened: ${result.weakenInsights.length}`);
+          console.log(`  Promoted to principles: ${result.promoteToePrinciples.length}`);
+        } else {
+          console.log('Learning system not enabled.');
+        }
+        break;
+      }
+
+      case 'learning': {
+        await matchmaker.initialize();
+        const learningStats = matchmaker.getLearningStats();
+        if (learningStats) {
+          console.log('\nLearning System Statistics');
+          console.log('='.repeat(30));
+          console.log(`Enabled:            ${learningStats.enabled}`);
+          console.log(`Total reflections:  ${learningStats.reflections}`);
+          console.log(`Active insights:    ${learningStats.insights}`);
+          console.log(`Active principles:  ${learningStats.principles}`);
+          console.log(`Last reflection:    ${learningStats.lastReflection?.toISOString() || 'never'}`);
+          console.log(`Last consolidation: ${learningStats.lastConsolidation?.toISOString() || 'never'}`);
+        } else {
+          console.log('Learning system not enabled.');
+        }
+        break;
+      }
+
       case 'help': {
         printHelp();
         break;
@@ -106,13 +153,16 @@ The Matchmaker - Agent Discovery for Moltbook
 Usage: matchmaker [command]
 
 Commands:
-  heartbeat   Run a full heartbeat cycle (default)
-  observe     Run observation only (fetch and process posts)
-  match       Process open gaps and create matches
-  publish     Publish queued items
-  digest      Publish weekly digest
-  stats       Show current statistics
-  help        Show this help message
+  heartbeat     Run a full heartbeat cycle (default)
+  observe       Run observation only (fetch and process posts)
+  match         Process open gaps and create matches
+  publish       Publish queued items
+  digest        Publish weekly digest
+  stats         Show current statistics
+  reflect       Force a reflection (learning system)
+  consolidate   Force consolidation of reflections into insights
+  learning      Show learning system statistics
+  help          Show this help message
 
 Environment Variables:
   MOLTBOOK_API_KEY      Moltbook API key (required)
@@ -127,6 +177,8 @@ Examples:
   matchmaker                  # Run full heartbeat
   matchmaker observe          # Just observe posts
   matchmaker stats            # Show statistics
+  matchmaker learning         # Show learning stats
+  matchmaker reflect          # Force a reflection
 
 For more information, see the README or SKILL.md file.
 `);

@@ -19,14 +19,26 @@ registerLogger(logger);
 /**
  * Normalize a post from the Moltbook API to our internal format.
  * The API may return author as a nested object or as flat fields.
+ * NOTE: In Moltbook, agent names ARE the unique identifiers.
  */
 function normalizePost(rawPost: Record<string, unknown>): MoltbookPost {
   // Handle nested author object: { author: { name: "...", id: "..." } }
   const author = rawPost.author as Record<string, unknown> | undefined;
 
-  // Prioritize author.id from nested object, then fall back to flat author_id
-  const authorId = (author?.id as string) || (rawPost.author_id as string) || 'unknown';
+  // In Moltbook, agent name IS the unique identifier
+  // Priority: author.id > author_id > author.name > author_name > 'unknown'
   const authorName = (author?.name as string) || (rawPost.author_name as string) || undefined;
+  const authorId = (author?.id as string) || (rawPost.author_id as string) || authorName || 'unknown';
+
+  // Log when we can't identify an author (for debugging)
+  if (authorId === 'unknown') {
+    logger.warn('unknown_author', {
+      postId: rawPost.id,
+      hasAuthorObject: !!author,
+      authorKeys: author ? Object.keys(author) : [],
+      rawKeys: Object.keys(rawPost).filter(k => k.includes('author'))
+    });
+  }
 
   // Handle nested submolt object: { submolt: { name: "...", id: "..." } }
   const submolt = rawPost.submolt as Record<string, unknown> | string | undefined;

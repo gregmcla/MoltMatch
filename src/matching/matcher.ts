@@ -36,6 +36,9 @@ export class Matcher {
   private db: MatchmakerDatabase;
   private vectorStore: VectorStore | null;
   private config: MatcherConfig;
+  // Learned principles for future matching adjustments
+  // Will be used to modify scoring weights or candidate selection
+  private _learnedPrinciples: string = '';
 
   constructor(
     db: MatchmakerDatabase,
@@ -45,6 +48,24 @@ export class Matcher {
     this.db = db;
     this.vectorStore = vectorStore;
     this.config = config;
+  }
+
+  /**
+   * Set learned principles for matching adjustments
+   */
+  setLearnedPrinciples(principles: string): void {
+    this._learnedPrinciples = principles;
+    logger.debug('matching_principles_updated', {
+      hasPrinciples: principles.length > 0,
+      principleLength: principles.length,
+    });
+  }
+
+  /**
+   * Get the current learned principles
+   */
+  getLearnedPrinciples(): string {
+    return this._learnedPrinciples;
   }
 
   /**
@@ -474,13 +495,37 @@ export class Matcher {
     totalMatches: number;
     acceptanceRate: number;
     collaborationRate: number;
+    avgConfidence: number;
   } {
     const stats = this.db.getMatchStats(30);
+    const recentMatches = this.db.getRecentMatches(7);
+    const avgConfidence = recentMatches.length > 0
+      ? recentMatches.reduce((sum, m) => sum + m.confidence, 0) / recentMatches.length
+      : 0.7;
 
     return {
       totalMatches: stats.total,
       acceptanceRate: stats.total > 0 ? stats.accepted / stats.total : 0,
       collaborationRate: stats.accepted > 0 ? stats.collaborations / stats.accepted : 0,
+      avgConfidence,
     };
+  }
+
+  /**
+   * Get top domains from recent matches
+   */
+  getTopDomains(limit: number = 5): string[] {
+    const recentMatches = this.db.getRecentMatches(30);
+    const domainCounts = new Map<string, number>();
+
+    for (const match of recentMatches) {
+      const count = domainCounts.get(match.capabilityDomain) || 0;
+      domainCounts.set(match.capabilityDomain, count + 1);
+    }
+
+    return [...domainCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([domain]) => domain);
   }
 }

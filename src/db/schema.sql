@@ -425,3 +425,48 @@ CREATE TABLE IF NOT EXISTS match_requests (
 
 CREATE INDEX IF NOT EXISTS idx_requests_status ON match_requests(status);
 CREATE INDEX IF NOT EXISTS idx_requests_requester ON match_requests(requester_id);
+
+-- ============================================================================
+-- Own Posts Tracking (for engagement notifications)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS own_posts (
+    post_id TEXT PRIMARY KEY,
+    post_type TEXT NOT NULL,            -- 'match_introduction', 'fallback_post', 'introduction', etc.
+    title TEXT,
+    submolt TEXT,
+    last_known_comment_count INTEGER DEFAULT 0,
+    last_known_upvotes INTEGER DEFAULT 0,
+    last_checked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_own_posts_type ON own_posts(post_type);
+CREATE INDEX IF NOT EXISTS idx_own_posts_created ON own_posts(created_at DESC);
+
+-- ============================================================================
+-- Seen Comments (to avoid duplicate notifications)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS seen_comments (
+    comment_id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    author_name TEXT,
+    content TEXT,
+    seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_seen_comments_post ON seen_comments(post_id);
+
+-- ============================================================================
+-- Karma Tracking
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS karma_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    karma INTEGER NOT NULL,
+    recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_karma_recorded ON karma_history(recorded_at DESC);

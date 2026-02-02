@@ -1038,4 +1038,120 @@ export class MatchmakerDatabase {
 
     return row.count;
   }
+
+  // ==========================================================================
+  // Engagement Tracking (for Telegram notifications)
+  // ==========================================================================
+
+  /**
+   * Track a post created by SkillLinker
+   */
+  trackOwnPost(
+    postId: string,
+    postType: string,
+    title?: string,
+    submolt?: string
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO own_posts (post_id, post_type, title, submolt, last_known_comment_count, last_known_upvotes)
+         VALUES (?, ?, ?, ?, 0, 0)`
+      )
+      .run(postId, postType, title || null, submolt || null);
+  }
+
+  /**
+   * Get all tracked posts for engagement checking
+   */
+  getTrackedPosts(): Array<{
+    postId: string;
+    postType: string;
+    title?: string;
+    submolt?: string;
+    lastKnownCommentCount: number;
+    lastKnownUpvotes: number;
+    lastCheckedAt: Date;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT post_id, post_type, title, submolt, last_known_comment_count, last_known_upvotes, last_checked_at
+         FROM own_posts
+         ORDER BY created_at DESC
+         LIMIT 50`
+      )
+      .all() as Record<string, unknown>[];
+
+    return rows.map(row => ({
+      postId: row.post_id as string,
+      postType: row.post_type as string,
+      title: row.title as string | undefined,
+      submolt: row.submolt as string | undefined,
+      lastKnownCommentCount: row.last_known_comment_count as number,
+      lastKnownUpvotes: row.last_known_upvotes as number,
+      lastCheckedAt: new Date(row.last_checked_at as string),
+    }));
+  }
+
+  /**
+   * Update tracked post engagement counts
+   */
+  updateTrackedPostCounts(postId: string, commentCount: number, upvotes: number): void {
+    this.db
+      .prepare(
+        `UPDATE own_posts
+         SET last_known_comment_count = ?,
+             last_known_upvotes = ?,
+             last_checked_at = CURRENT_TIMESTAMP
+         WHERE post_id = ?`
+      )
+      .run(commentCount, upvotes, postId);
+  }
+
+  /**
+   * Check if we've already seen a comment
+   */
+  hasSeenComment(commentId: string): boolean {
+    const row = this.db
+      .prepare(`SELECT 1 FROM seen_comments WHERE comment_id = ?`)
+      .get(commentId);
+    return !!row;
+  }
+
+  /**
+   * Mark a comment as seen
+   */
+  markCommentSeen(
+    commentId: string,
+    postId: string,
+    authorId: string,
+    authorName?: string,
+    content?: string
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO seen_comments (comment_id, post_id, author_id, author_name, content)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(commentId, postId, authorId, authorName || null, content || null);
+  }
+
+  /**
+   * Record karma snapshot
+   */
+  recordKarma(karma: number): void {
+    this.db
+      .prepare(`INSERT INTO karma_history (karma) VALUES (?)`)
+      .run(karma);
+  }
+
+  /**
+   * Get the last recorded karma
+   */
+  getLastKarma(): number | null {
+    const row = this.db
+      .prepare(`SELECT karma FROM karma_history ORDER BY recorded_at DESC LIMIT 1`)
+      .get() as { karma: number } | undefined;
+
+    return row?.karma ?? null;
+  }
 }

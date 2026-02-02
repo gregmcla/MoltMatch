@@ -367,6 +367,16 @@ export class Matchmaker {
               if (publishResult.success) {
                 result.publishing.itemsPublished++;
 
+                // Track this post for engagement monitoring
+                if (publishResult.postId) {
+                  this.db.trackOwnPost(
+                    publishResult.postId,
+                    'match_introduction',
+                    publishResult.title,
+                    'introductions'
+                  );
+                }
+
                 // Send Telegram notification
                 if (this.telegram.isEnabled()) {
                   await this.telegram.notifyPostCreated({
@@ -434,6 +444,16 @@ export class Matchmaker {
                   title: fallbackPost.title,
                 });
 
+                // Track this post for engagement monitoring
+                if (publishResult.data?.id) {
+                  this.db.trackOwnPost(
+                    publishResult.data.id,
+                    'fallback_post',
+                    fallbackPost.title,
+                    fallbackPost.submolt
+                  );
+                }
+
                 // Send Telegram notification
                 if (this.telegram.isEnabled()) {
                   await this.telegram.notifyPostCreated({
@@ -492,7 +512,16 @@ export class Matchmaker {
       logger.error('phase_maintenance_error', { error: msg });
     }
 
-    // Phase 5: Learning (reflection and consolidation)
+    // Phase 5: Check engagement (comments/karma on our posts)
+    try {
+      await this.checkEngagement();
+    } catch (error) {
+      const msg = `Engagement check failed: ${(error as Error).message}`;
+      result.errors.push(msg);
+      logger.error('phase_engagement_error', { error: msg });
+    }
+
+    // Phase 6: Learning (reflection and consolidation)
     if (this.learningEnabled && this.reflector && this.consolidator && this.reflectionStore) {
       try {
         logger.info('phase_learning_start');
@@ -1135,6 +1164,98 @@ Good to have you here! 🦞`;
         });
       }
     }
+  }
+
+  /**
+   * Check for new engagement on our posts and karma changes
+   */
+  async checkEngagement(): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    // Skip if Telegram not enabled
+    if (!this.telegram.isEnabled()) {
+      return;
+    }
+
+    logger.info('checking_engagement');
+
+    // Check karma changes
+    try {
+      const meResult = await this.client.getMe();
+      if (meResult.success && meResult.data) {
+        const currentKarma = meResult.data.karma;
+        const lastKarma = this.db.getLastKarma();
+
+        if (lastKarma !== null && currentKarma !== lastKarma) {
+          const change = currentKarma - lastKarma;
+          await this.telegram.notifyEngagement({
+            type: 'karma',
+            karmaChange: change,
+          });
+          logger.info('karma_change_notified', { change, current: currentKarma });
+        }
+
+        this.db.recordKarma(currentKarma);
+      }
+    } catch (error) {
+      logger.error('karma_check_failed', { error: (error as Error).message });
+    }
+
+    // Check for new comments on our posts
+    const trackedPosts = this.db.getTrackedPosts();
+
+    for (const post of trackedPosts) {
+      try {
+        const commentsResult = await this.client.getComments(post.postId);
+
+        if (!commentsResult.success || !commentsResult.data) {
+          continue;
+        }
+
+        const comments = commentsResult.data;
+
+        // Find new comments we haven't seen
+        for (const comment of comments) {
+          if (!this.db.hasSeenComment(comment.id)) {
+            // Skip our own comments
+            const meResult = await this.client.getMe();
+            if (meResult.success && meResult.data && comment.author_id === meResult.data.id) {
+              this.db.markCommentSeen(comment.id, post.postId, comment.author_id, comment.author_name, comment.content);
+              continue;
+            }
+
+            // Send notification for new comment
+            await this.telegram.notifyEngagement({
+              type: 'reply',
+              postId: post.postId,
+              actorName: comment.author_name || comment.author_id,
+              content: comment.content,
+            });
+
+            logger.info('new_comment_notified', {
+              postId: post.postId,
+              commentId: comment.id,
+              author: comment.author_id,
+            });
+
+            // Mark as seen
+            this.db.markCommentSeen(comment.id, post.postId, comment.author_id, comment.author_name, comment.content);
+          }
+        }
+
+        // Update counts
+        this.db.updateTrackedPostCounts(post.postId, comments.length, 0);
+      } catch (error) {
+        logger.error('comment_check_failed', {
+          postId: post.postId,
+          error: (error as Error).message,
+        });
+      }
+    }
+
+    logger.info('engagement_check_complete', { postsChecked: trackedPosts.length });
   }
 
   /**

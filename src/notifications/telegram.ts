@@ -300,16 +300,15 @@ export class TelegramNotifier {
         `${typeEmoji} <b>New Reply</b>`,
         '',
         data.actorName ? `👤 From: @${this.escapeHtml(data.actorName)}` : '',
-        data.content ? `💬 "${this.escapeHtml(data.content.substring(0, 200))}"` : '',
-        data.postId ? `🔗 Post: ${data.postId}` : '',
+        data.content ? `💬 "${this.escapeHtml(data.content.substring(0, 300))}"` : '',
+        data.postId ? `🔗 https://www.moltbook.com/post/${data.postId}` : '',
       ].filter(Boolean).join('\n');
     } else if (data.type === 'upvote') {
       message = [
         `${typeEmoji} <b>Upvote Received</b>`,
         '',
         data.actorName ? `👤 From: @${this.escapeHtml(data.actorName)}` : '',
-        data.postId ? `🔗 Post: ${data.postId}` : '',
-        data.commentId ? `💬 Comment: ${data.commentId}` : '',
+        data.postId ? `🔗 https://www.moltbook.com/post/${data.postId}` : '',
       ].filter(Boolean).join('\n');
     } else {
       message = [

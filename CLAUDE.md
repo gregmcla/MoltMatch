@@ -7,17 +7,61 @@ MoltMatch is the SkillLinker agent for Moltbook - an AI matchmaker that observes
 
 ```bash
 # Run a full heartbeat cycle (observe → match → publish → learn)
-npx ts-node src/index.ts heartbeat
+npx tsx src/index.ts heartbeat
 
 # Force a learning reflection
-npx ts-node src/index.ts reflect
+npx tsx src/index.ts reflect
 
 # Force principle consolidation
-npx ts-node src/index.ts consolidate
+npx tsx src/index.ts consolidate
 
 # View learning stats
-npx ts-node src/index.ts learning
+npx tsx src/index.ts learning
 ```
+
+## Workflow Instructions
+
+### Plan Mode
+Use `/plan` for complex features before implementation. Think through architecture, edge cases, and failure modes before writing code.
+
+### Subagent Strategy
+Use Task tool with specialized agents for:
+- Codebase exploration (subagent_type=Explore)
+- Multi-step research tasks (subagent_type=general-purpose)
+- Running tests and builds in parallel
+
+### Self-Improvement Loop
+When you encounter a bug or make a mistake:
+1. Fix the immediate issue
+2. Add the lesson to this CLAUDE.md file under "Common Mistakes to Avoid"
+3. This prevents repeating the same mistake
+
+### Verification Before Done
+Before marking any task complete:
+1. Build passes (`npm run build`)
+2. Tests pass if applicable (`npm test`)
+3. Manual verification if UI/API changes
+
+### Demand Elegance
+- Prefer simple, readable solutions over clever ones
+- If a solution feels hacky, step back and find a cleaner approach
+- Delete dead code; don't comment it out
+
+### Autonomous Bug Fixing
+If you break something while working:
+1. Stop and fix it immediately
+2. Don't ask permission to fix obvious bugs you introduced
+3. Add lesson to CLAUDE.md if it's a pattern
+
+### Task Management
+- Use TodoWrite for multi-step work
+- Mark todos complete immediately when done (don't batch)
+- Only one task should be in_progress at a time
+
+### Core Principles
+1. **Simplicity First** - The minimum code that solves the problem
+2. **No Laziness** - Don't skip steps, don't leave TODOs
+3. **Minimal Impact** - Change only what's necessary; don't refactor unrelated code
 
 ## Architecture
 
@@ -86,6 +130,23 @@ import type { DEFAULT_LEARNING_CONFIG } from './types';
 // GOOD
 import { DEFAULT_LEARNING_CONFIG } from './types';
 ```
+
+### 5. Use `tsx` Not `ts-node`
+This project uses `tsx` for running TypeScript. Never use `ts-node`:
+
+```bash
+# BAD
+npx ts-node src/index.ts heartbeat
+
+# GOOD
+npx tsx src/index.ts heartbeat
+```
+
+### 6. Keyword Matching False Positives
+When matching text tokens, filter out stop words and require minimum lengths:
+- Stop words: "and", "or", "the", "for", etc. cause false matches
+- Minimum 3 chars for tokens, 4 chars for partial substring matches
+- Apply stemming only for words >= 5 chars
 
 ## Personality
 SkillLinker's personality is defined in `SOUL.md`. Key traits:

@@ -230,8 +230,10 @@ export class TelegramNotifier {
       lines.push('', `📋 ${this.escapeHtml(data.details)}`);
     }
 
-    if (data.postUrl) {
-      lines.push('', `🔗 ${data.postUrl}`);
+    // Always add link - use postUrl if provided, otherwise construct from postId
+    const postLink = data.postUrl || (data.postId ? `https://www.moltbook.com/post/${data.postId}` : null);
+    if (postLink) {
+      lines.push('', `🔗 ${postLink}`);
     }
 
     await this.sendMessage(lines.join('\n'));
@@ -271,6 +273,11 @@ export class TelegramNotifier {
 
     if (data.details) {
       lines.push('', `📋 ${this.escapeHtml(data.details)}`);
+    }
+
+    // Add link to the post
+    if (data.postId) {
+      lines.push('', `🔗 https://www.moltbook.com/post/${data.postId}`);
     }
 
     await this.sendMessage(lines.join('\n'));

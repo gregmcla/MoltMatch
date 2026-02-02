@@ -9,9 +9,10 @@ import { config } from './config.js';
 import { createLogger, registerLogger, setGlobalLogLevel } from './utils/logger.js';
 import { MatchmakerDatabase } from './db/database.js';
 import { VectorStore } from './db/vector-store.js';
+import { LocalVectorStore } from './db/local-vector-store.js';
 import { MoltbookClient } from './api/moltbook-client.js';
 import { CapabilityExtractor } from './extraction/capability-extractor.js';
-import { Observer } from './observer/observer.js';
+import { Observer, type SeekingHelpPost } from './observer/observer.js';
 import { Matcher } from './matching/matcher.js';
 import { RateLimiter } from './publishing/rate-limiter.js';
 import { Publisher } from './publishing/publisher.js';
@@ -70,6 +71,7 @@ export interface HeartbeatResult {
 export class Matchmaker {
   private db: MatchmakerDatabase;
   private vectorStore: VectorStore | null = null;
+  private localVectorStore: LocalVectorStore | null = null;
   private client: MoltbookClient;
   private extractor: CapabilityExtractor;
   private observer: Observer | null = null;
@@ -134,22 +136,37 @@ export class Matchmaker {
     // Initialize database
     this.db.initialize();
 
-    // Try to initialize vector store (optional - continues without it)
+    // Try to initialize ChromaDB vector store (optional - continues without it)
     try {
       this.vectorStore = new VectorStore(config.database.chromaPath);
       await this.vectorStore.initialize();
       this.vectorStoreEnabled = true;
-      logger.info('vector_store_enabled');
+      logger.info('chromadb_vector_store_enabled');
     } catch (error) {
-      logger.warn('vector_store_disabled', {
-        reason: 'ChromaDB not available - running without semantic search',
+      logger.warn('chromadb_vector_store_disabled', {
+        reason: 'ChromaDB not available - using local vector store',
         error: (error as Error).message
       });
       this.vectorStore = null;
       this.vectorStoreEnabled = false;
     }
 
-    // Initialize observer and matcher (with or without vector store)
+    // Always initialize local vector store (SQLite-based, no external deps)
+    try {
+      this.localVectorStore = new LocalVectorStore(this.db);
+      const stats = this.localVectorStore.getStats();
+      logger.info('local_vector_store_enabled', {
+        capabilities: stats.capabilities,
+        gaps: stats.gaps,
+      });
+    } catch (error) {
+      logger.warn('local_vector_store_disabled', {
+        error: (error as Error).message,
+      });
+      this.localVectorStore = null;
+    }
+
+    // Initialize observer with both vector stores
     this.observer = new Observer(
       this.client,
       this.db,
@@ -158,14 +175,22 @@ export class Matchmaker {
       {
         targetSubmolts: config.targetSubmolts,
         postsPerSubmolt: 25,
-      }
+      },
+      this.localVectorStore,
+      config.agent.name
     );
 
-    this.matcher = new Matcher(this.db, this.vectorStore, {
-      minConfidence: config.matching.minConfidence,
-      maxMatchesPerCycle: config.matching.maxMatchesPerCycle,
-      weights: config.matching.weights,
-    });
+    // Initialize matcher with both vector stores
+    this.matcher = new Matcher(
+      this.db,
+      this.vectorStore,
+      {
+        minConfidence: config.matching.minConfidence,
+        maxMatchesPerCycle: config.matching.maxMatchesPerCycle,
+        weights: config.matching.weights,
+      },
+      this.localVectorStore
+    );
 
     // Initialize learning system
     try {
@@ -276,6 +301,16 @@ export class Matchmaker {
 
       // Welcome new agents after observation
       await this.welcomeNewAgents();
+
+      // Process match requests (Request-a-Match feature)
+      if (observeResult.matchRequestsFound > 0) {
+        await this.processMatchRequests();
+      }
+
+      // Process seeking-help posts with reactive comments
+      if (observeResult.seekingHelpPosts.length > 0) {
+        await this.processSeekingHelpPosts(observeResult.seekingHelpPosts);
+      }
     } catch (error) {
       const msg = `Observation failed: ${(error as Error).message}`;
       result.errors.push(msg);
@@ -844,6 +879,196 @@ Good to have you here! 🦞`;
       }
     } catch (error) {
       logger.error('welcome_phase_failed', { error: (error as Error).message });
+    }
+  }
+
+  /**
+   * Process pending match requests (@SkillLinker mentions)
+   */
+  private async processMatchRequests(): Promise<void> {
+    const requests = this.db.getPendingMatchRequests(5);
+
+    if (requests.length === 0) return;
+
+    logger.info('processing_match_requests', { count: requests.length });
+
+    for (const request of requests) {
+      try {
+        // Find matches for the requested domain
+        const matches: Array<{
+          agentName: string;
+          agentId: string;
+          domain: string;
+          confidence: number;
+        }> = [];
+
+        if (request.parsedDomain) {
+          const capabilities = this.db.findAgentsWithCapability(
+            request.parsedDomain,
+            0.5,
+            5
+          );
+
+          for (const cap of capabilities) {
+            if (cap.agent.id === request.requesterId) continue;
+
+            matches.push({
+              agentName: cap.agent.name || cap.agent.id,
+              agentId: cap.agent.id,
+              domain: cap.capability.domain,
+              confidence: cap.capability.confidence,
+            });
+          }
+        }
+
+        // Get requester info
+        const requester = this.db.getAgent(request.requesterId);
+        const requesterName = requester?.name || request.requesterId;
+
+        // Respond to the request
+        const publishResult = await this.publisher.respondToMatchRequest(
+          request.postId,
+          requesterName,
+          matches
+        );
+
+        // Update request status
+        this.db.updateMatchRequestStatus(
+          request.id,
+          matches.length > 0 ? 'fulfilled' : 'processed',
+          publishResult.postId
+        );
+
+        logger.info('match_request_processed', {
+          requestId: request.id,
+          matchesFound: matches.length,
+          success: publishResult.success,
+        });
+      } catch (error) {
+        logger.error('match_request_processing_failed', {
+          requestId: request.id,
+          error: (error as Error).message,
+        });
+      }
+    }
+  }
+
+  /**
+   * Process posts seeking help with reactive comment suggestions
+   */
+  private async processSeekingHelpPosts(posts: SeekingHelpPost[]): Promise<void> {
+    // Sort by help signal strength (strongest first)
+    const sortedPosts = [...posts].sort((a, b) => b.helpSignalStrength - a.helpSignalStrength);
+
+    // Process top 3 to avoid spamming
+    const toProcess = sortedPosts.slice(0, 3);
+
+    logger.info('processing_seeking_help_posts', { count: toProcess.length });
+
+    for (const seekingPost of toProcess) {
+      try {
+        // Check if we've already commented on this post
+        const alreadyCommented = this.db.getDb()
+          .prepare('SELECT COUNT(*) as count FROM processed_posts WHERE post_id = ?')
+          .get(`reactive_${seekingPost.post.id}`) as { count: number };
+
+        if (alreadyCommented.count > 0) continue;
+
+        // Find a good match for this help request
+        const capabilities = this.db.findAgentsWithCapability(
+          seekingPost.domain,
+          0.6, // Higher threshold for reactive suggestions
+          3
+        );
+
+        // Filter out the seeker and find best match
+        const validMatches = capabilities.filter(
+          cap => cap.agent.id !== seekingPost.post.author_id
+        );
+
+        if (validMatches.length === 0) {
+          logger.debug('no_reactive_match_found', {
+            postId: seekingPost.post.id,
+            domain: seekingPost.domain,
+          });
+          continue;
+        }
+
+        const bestMatch = validMatches[0];
+
+        // Post reactive comment
+        const publishResult = await this.publisher.postReactiveMatchComment(
+          seekingPost.post.id,
+          seekingPost.post.author_name || seekingPost.post.author_id,
+          bestMatch.agent.name || bestMatch.agent.id,
+          bestMatch.agent.id,
+          seekingPost.domain,
+          bestMatch.capability.confidence,
+          bestMatch.capability.demonstratesCount + bestMatch.capability.answersCount
+        );
+
+        if (publishResult.success) {
+          // Mark as processed
+          this.db.getDb()
+            .prepare('INSERT INTO processed_posts (post_id, submolt, extracted_signals) VALUES (?, ?, ?)')
+            .run(`reactive_${seekingPost.post.id}`, seekingPost.post.submolt, 0);
+
+          logger.info('reactive_match_posted', {
+            postId: seekingPost.post.id,
+            seeker: seekingPost.post.author_id,
+            helper: bestMatch.agent.id,
+            domain: seekingPost.domain,
+          });
+        }
+      } catch (error) {
+        logger.error('reactive_match_failed', {
+          postId: seekingPost.post.id,
+          error: (error as Error).message,
+        });
+      }
+    }
+  }
+
+  /**
+   * Track outcomes for recent matches (Feedback Loop)
+   */
+  async trackMatchOutcomes(): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    const matchesToTrack = this.db.getMatchesNeedingOutcomeTracking(7);
+
+    if (matchesToTrack.length === 0) {
+      logger.debug('no_matches_to_track');
+      return;
+    }
+
+    logger.info('tracking_match_outcomes', { count: matchesToTrack.length });
+
+    for (const match of matchesToTrack) {
+      // Calculate success score based on recorded interactions
+      const successScore = this.db.calculateMatchSuccessScore(match.id);
+
+      if (successScore > 0) {
+        // Determine outcomes based on interaction score
+        const accepted = successScore > 0.2;
+        const collaborationOccurred = successScore > 0.5;
+
+        this.db.updateMatchOutcome(
+          match.id,
+          accepted,
+          collaborationOccurred,
+          successScore
+        );
+
+        logger.info('match_outcome_tracked', {
+          matchId: match.id,
+          successScore,
+          accepted,
+          collaborationOccurred,
+        });
+      }
     }
   }
 

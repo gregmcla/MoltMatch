@@ -817,4 +817,225 @@ export class MatchmakerDatabase {
     };
     return columns[signalType] || 'demonstrates_count';
   }
+
+  // ==========================================================================
+  // Match Interaction Operations (Feedback Loop)
+  // ==========================================================================
+
+  recordMatchInteraction(
+    matchId: string,
+    interactionType: 'reply' | 'upvote' | 'mention' | 'collaboration_signal',
+    actorId: string,
+    postId?: string,
+    commentId?: string,
+    sentiment?: 'positive' | 'neutral' | 'negative'
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO match_interactions (match_id, interaction_type, actor_id, post_id, comment_id, sentiment)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(matchId, interactionType, actorId, postId || null, commentId || null, sentiment || 'neutral');
+  }
+
+  getMatchInteractions(matchId: string): Array<{
+    id: number;
+    interactionType: string;
+    actorId: string;
+    postId?: string;
+    commentId?: string;
+    sentiment: string;
+    createdAt: Date;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT id, interaction_type, actor_id, post_id, comment_id, sentiment, created_at
+         FROM match_interactions
+         WHERE match_id = ?
+         ORDER BY created_at DESC`
+      )
+      .all(matchId) as Record<string, unknown>[];
+
+    return rows.map(row => ({
+      id: row.id as number,
+      interactionType: row.interaction_type as string,
+      actorId: row.actor_id as string,
+      postId: row.post_id as string | undefined,
+      commentId: row.comment_id as string | undefined,
+      sentiment: row.sentiment as string,
+      createdAt: new Date(row.created_at as string),
+    }));
+  }
+
+  /**
+   * Calculate match success score based on interactions
+   */
+  calculateMatchSuccessScore(matchId: string): number {
+    const interactions = this.getMatchInteractions(matchId);
+    if (interactions.length === 0) return 0;
+
+    let score = 0;
+    for (const interaction of interactions) {
+      const weight = {
+        reply: 0.3,
+        upvote: 0.1,
+        mention: 0.2,
+        collaboration_signal: 0.5,
+      }[interaction.interactionType] || 0.1;
+
+      const sentimentMultiplier = {
+        positive: 1.0,
+        neutral: 0.5,
+        negative: -0.5,
+      }[interaction.sentiment] || 0.5;
+
+      score += weight * sentimentMultiplier;
+    }
+
+    return Math.max(0, Math.min(1, score));
+  }
+
+  /**
+   * Get matches that need outcome tracking
+   */
+  getMatchesNeedingOutcomeTracking(daysSincePublished: number = 7): Match[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM matches
+         WHERE published_at IS NOT NULL
+           AND accepted IS NULL
+           AND published_at < datetime('now', '-' || ? || ' days')
+         ORDER BY published_at ASC
+         LIMIT 50`
+      )
+      .all(daysSincePublished) as Record<string, unknown>[];
+
+    return rows.map(row => this.rowToMatch(row));
+  }
+
+  // ==========================================================================
+  // Match Request Operations (Request-a-Match)
+  // ==========================================================================
+
+  createMatchRequest(
+    requesterId: string,
+    postId: string,
+    requestText: string,
+    parsedDomain?: string,
+    commentId?: string,
+    priority: string = 'normal'
+  ): number {
+    const result = this.db
+      .prepare(
+        `INSERT INTO match_requests (requester_id, post_id, comment_id, request_text, parsed_domain, priority)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(requesterId, postId, commentId || null, requestText, parsedDomain || null, priority);
+
+    return Number(result.lastInsertRowid);
+  }
+
+  getPendingMatchRequests(limit: number = 10): Array<{
+    id: number;
+    requesterId: string;
+    postId: string;
+    commentId?: string;
+    requestText: string;
+    parsedDomain?: string;
+    priority: string;
+    createdAt: Date;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT id, requester_id, post_id, comment_id, request_text, parsed_domain, priority, created_at
+         FROM match_requests
+         WHERE status = 'pending'
+         ORDER BY
+           CASE priority
+             WHEN 'high' THEN 1
+             WHEN 'normal' THEN 2
+             WHEN 'low' THEN 3
+           END,
+           created_at ASC
+         LIMIT ?`
+      )
+      .all(limit) as Record<string, unknown>[];
+
+    return rows.map(row => ({
+      id: row.id as number,
+      requesterId: row.requester_id as string,
+      postId: row.post_id as string,
+      commentId: row.comment_id as string | undefined,
+      requestText: row.request_text as string,
+      parsedDomain: row.parsed_domain as string | undefined,
+      priority: row.priority as string,
+      createdAt: new Date(row.created_at as string),
+    }));
+  }
+
+  updateMatchRequestStatus(
+    requestId: number,
+    status: 'processed' | 'fulfilled' | 'expired',
+    responsePostId?: string
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE match_requests
+         SET status = ?,
+             response_post_id = ?,
+             processed_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+      )
+      .run(status, responsePostId || null, requestId);
+  }
+
+  // ==========================================================================
+  // Enhanced Match Deduplication
+  // ==========================================================================
+
+  /**
+   * Check if agents have been matched recently across ANY domain
+   */
+  hasRecentMatchAnyDomain(seekerId: string, helperId: string, days: number = 30): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 FROM matches
+         WHERE ((seeker_id = ? AND helper_id = ?) OR (seeker_id = ? AND helper_id = ?))
+           AND created_at > datetime('now', '-' || ? || ' days')
+         LIMIT 1`
+      )
+      .get(seekerId, helperId, helperId, seekerId, days);
+
+    return !!row;
+  }
+
+  /**
+   * Get match count between two agents (for fatigue tracking)
+   */
+  getMatchCountBetweenAgents(agentA: string, agentB: string, days: number = 90): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) as count FROM matches
+         WHERE ((seeker_id = ? AND helper_id = ?) OR (seeker_id = ? AND helper_id = ?))
+           AND created_at > datetime('now', '-' || ? || ' days')`
+      )
+      .get(agentA, agentB, agentB, agentA, days) as { count: number };
+
+    return row.count;
+  }
+
+  /**
+   * Get how many times an agent has been a helper recently (overload check)
+   */
+  getAgentHelperCount(agentId: string, days: number = 7): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) as count FROM matches
+         WHERE helper_id = ?
+           AND created_at > datetime('now', '-' || ? || ' days')`
+      )
+      .get(agentId, days) as { count: number };
+
+    return row.count;
+  }
 }

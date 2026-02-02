@@ -509,6 +509,156 @@ export class Publisher {
     return priority as Priority;
   }
 
+  // ==========================================================================
+  // Reactive Matching (Comment-based suggestions)
+  // ==========================================================================
+
+  /**
+   * Post a reactive match comment on a seeking-help post
+   */
+  async postReactiveMatchComment(
+    postId: string,
+    seekerName: string,
+    helperName: string,
+    _helperId: string,
+    domain: string,
+    confidence: number,
+    evidenceCount: number
+  ): Promise<PublishResult> {
+    if (!this.rateLimiter.canComment()) {
+      const status = this.rateLimiter.getStatus();
+      return {
+        success: false,
+        error: `Rate limited until ${status.commentRefillAt.toISOString()}`,
+      };
+    }
+
+    // Generate a helpful, non-intrusive comment
+    const confidenceStr = confidence > 0.8 ? 'strong' : confidence > 0.6 ? 'good' : 'potential';
+
+    const content = [
+      `Hi @${seekerName}! I noticed you might need help with ${domain}.`,
+      '',
+      `I found a ${confidenceStr} match: @${helperName} has demonstrated expertise in this area${evidenceCount > 1 ? ` (${evidenceCount} times)` : ''}.`,
+      '',
+      `Would you like me to make a formal introduction?`,
+      '',
+      `_Reply with "yes" or tag them directly if you'd like to connect!_`,
+    ].join('\n');
+
+    const result = await this.client.createComment({
+      postId,
+      content,
+    });
+
+    if (result.success && result.data) {
+      this.rateLimiter.consumeComment();
+
+      logger.info('reactive_match_commented', {
+        postId,
+        commentId: result.data.id,
+        seekerName,
+        helperName,
+        domain,
+      });
+
+      return {
+        success: true,
+        postId: result.data.id,
+      };
+    }
+
+    return {
+      success: false,
+      error: result.error?.message || 'Failed to post comment',
+    };
+  }
+
+  /**
+   * Respond to a match request (@SkillLinker mention)
+   */
+  async respondToMatchRequest(
+    postId: string,
+    requesterName: string,
+    matches: Array<{
+      agentName: string;
+      agentId: string;
+      domain: string;
+      confidence: number;
+    }>
+  ): Promise<PublishResult> {
+    if (!this.rateLimiter.canComment()) {
+      const status = this.rateLimiter.getStatus();
+      return {
+        success: false,
+        error: `Rate limited until ${status.commentRefillAt.toISOString()}`,
+      };
+    }
+
+    let content: string;
+
+    if (matches.length === 0) {
+      content = [
+        `Hi @${requesterName}! Thanks for reaching out.`,
+        '',
+        `I searched my network but couldn't find a strong match for your request right now.`,
+        '',
+        `A few suggestions:`,
+        `- Try posting in a relevant submolt to attract experts`,
+        `- Add a [SEEKING: your_skill] tag to help me find matches`,
+        `- Check back later as I'm always learning about new agents!`,
+      ].join('\n');
+    } else if (matches.length === 1) {
+      const m = matches[0];
+      content = [
+        `Hi @${requesterName}! I found a match for you:`,
+        '',
+        `**@${m.agentName}** has expertise in ${m.domain} (confidence: ${Math.round(m.confidence * 100)}%)`,
+        '',
+        `Would you like me to make a formal introduction?`,
+      ].join('\n');
+    } else {
+      const matchList = matches
+        .slice(0, 3)
+        .map((m, i) => `${i + 1}. **@${m.agentName}** - ${m.domain} (${Math.round(m.confidence * 100)}%)`)
+        .join('\n');
+
+      content = [
+        `Hi @${requesterName}! I found ${matches.length} potential matches:`,
+        '',
+        matchList,
+        '',
+        `Let me know which one interests you and I'll make an introduction!`,
+      ].join('\n');
+    }
+
+    const result = await this.client.createComment({
+      postId,
+      content,
+    });
+
+    if (result.success && result.data) {
+      this.rateLimiter.consumeComment();
+
+      logger.info('match_request_responded', {
+        postId,
+        commentId: result.data.id,
+        requesterName,
+        matchCount: matches.length,
+      });
+
+      return {
+        success: true,
+        postId: result.data.id,
+      };
+    }
+
+    return {
+      success: false,
+      error: result.error?.message || 'Failed to respond to match request',
+    };
+  }
+
   /**
    * Get queue statistics
    */

@@ -8,6 +8,7 @@ import { createLogger, registerLogger } from '../utils/logger.js';
 import { generateEmbedding } from '../extraction/embeddings.js';
 import type { MatchmakerDatabase } from '../db/database.js';
 import type { VectorStore } from '../db/vector-store.js';
+import type { LocalVectorStore } from '../db/local-vector-store.js';
 import type {
   AgentProfile,
   Capability,
@@ -35,6 +36,7 @@ export interface MatcherConfig {
 export class Matcher {
   private db: MatchmakerDatabase;
   private vectorStore: VectorStore | null;
+  private localVectorStore: LocalVectorStore | null;
   private config: MatcherConfig;
   // Learned principles for future matching adjustments
   // Will be used to modify scoring weights or candidate selection
@@ -43,10 +45,12 @@ export class Matcher {
   constructor(
     db: MatchmakerDatabase,
     vectorStore: VectorStore | null,
-    config: MatcherConfig
+    config: MatcherConfig,
+    localVectorStore?: LocalVectorStore | null
   ) {
     this.db = db;
     this.vectorStore = vectorStore;
+    this.localVectorStore = localVectorStore || null;
     this.config = config;
   }
 
@@ -83,19 +87,41 @@ export class Matcher {
 
     // Search for agents with matching capabilities
     let searchResults: Array<{ agentId: string; domain: string; confidence: number; distance: number }> = [];
+    const gapEmbedding = generateEmbedding(gap.domain);
 
     if (this.vectorStore) {
-      // Use vector search for semantic matching
-      const gapEmbedding = generateEmbedding(gap.domain);
+      // Use ChromaDB vector search for semantic matching
       searchResults = await this.vectorStore.searchCapabilities(
         gapEmbedding,
         100, // Get top 100 candidates
         0.5, // Minimum confidence
         gap.agentId // Exclude the seeker
       );
+      logger.debug('using_chromadb_matching');
+    } else if (this.localVectorStore) {
+      // Use local SQLite-based vector search
+      const localResults = this.localVectorStore.searchCapabilities(
+        gapEmbedding,
+        100,
+        0.5,
+        gap.agentId
+      );
+
+      // Convert similarity to distance (ChromaDB uses distance, lower is better)
+      searchResults = localResults.map(result => ({
+        agentId: result.agentId,
+        domain: result.domain,
+        confidence: result.confidence,
+        distance: 1 - result.similarity, // Convert similarity to distance
+      }));
+
+      logger.debug('using_local_vector_matching', {
+        candidatesFound: searchResults.length,
+        topSimilarity: localResults[0]?.similarity.toFixed(3),
+      });
     } else {
       // Fallback: Use SQL-based keyword matching with improved scoring
-      logger.debug('using_sql_fallback_matching', { reason: 'vector_store_unavailable' });
+      logger.debug('using_sql_fallback_matching', { reason: 'no_vector_store_available' });
       const allCapabilities = this.db.getAllCapabilities();
 
       // Tokenize gap domain more thoroughly
@@ -242,30 +268,50 @@ export class Matcher {
   }
 
   /**
-   * Score potential mutual benefit
+   * Score potential mutual benefit (enhanced for complementary matching)
    */
   private scoreMutualBenefit(
     seeker: AgentProfile,
     helper: AgentProfile,
-    _gap: CapabilityGap
+    gap: CapabilityGap
   ): number {
-    let score = 0.5; // Base score
+    let score = 0.4; // Base score (slightly lower to make complementary bonuses more impactful)
 
-    // Check if seeker has capabilities helper might want
+    // Get capabilities for both agents
     const seekerCapabilities = this.db.getAgentCapabilities(seeker.id, 0.5);
     const helperCapabilities = this.db.getAgentCapabilities(helper.id, 0.5);
 
     // Find complementary capabilities
     const seekerDomains = new Set(seekerCapabilities.map((c) => c.domain.toLowerCase()));
     const helperDomains = new Set(helperCapabilities.map((c) => c.domain.toLowerCase()));
+    const gapDomainLower = gap.domain.toLowerCase();
 
-    // Seeker has something helper doesn't
-    const uniqueToSeeker = [...seekerDomains].filter((d) => !helperDomains.has(d));
-    if (uniqueToSeeker.length > 0) {
-      score += 0.2;
+    // COMPLEMENTARY MATCHING: Helper has what seeker needs (gap domain)
+    // This is the primary matching signal
+    const helperHasGapDomain = [...helperDomains].some(d =>
+      d.includes(gapDomainLower) || gapDomainLower.includes(d)
+    );
+    if (helperHasGapDomain) {
+      score += 0.25; // Strong bonus for direct gap-to-capability match
     }
 
-    // Both have collaborated before successfully
+    // MUTUAL BENEFIT: Seeker has something helper doesn't
+    const uniqueToSeeker = [...seekerDomains].filter((d) => !helperDomains.has(d));
+    if (uniqueToSeeker.length > 0) {
+      score += 0.15;
+    }
+
+    // Check if helper has any open gaps that seeker could help with
+    const helperGaps = this.db.getOpenGaps(100).filter(g => g.agentId === helper.id);
+    const seekerCouldHelp = helperGaps.some(g => {
+      const gapDomain = g.domain.toLowerCase();
+      return [...seekerDomains].some(d => d.includes(gapDomain) || gapDomain.includes(d));
+    });
+    if (seekerCouldHelp) {
+      score += 0.15; // Both could help each other
+    }
+
+    // Historical collaboration success
     const previousMatches = this.db
       .getRecentMatches(90)
       .filter(
@@ -278,7 +324,7 @@ export class Matcher {
       (m) => m.collaborationOccurred
     );
     if (successfulPrevious.length > 0) {
-      score += 0.2;
+      score += 0.15;
     }
 
     // Helper has good collaboration history
@@ -364,21 +410,39 @@ export class Matcher {
   }
 
   /**
-   * Score novelty (prefer new connections)
+   * Score novelty (prefer new connections, avoid match fatigue)
    */
   private scoreNovelty(seekerId: string, helperId: string): number {
-    // Check for recent matches between these agents
-    const hasRecentMatch = this.db.hasRecentMatch(seekerId, helperId, 30);
+    // Check for very recent matches (within 14 days) - strong penalty
+    const hasVeryRecentMatch = this.db.hasRecentMatchAnyDomain(seekerId, helperId, 14);
+    if (hasVeryRecentMatch) {
+      return 0.1; // Too recent, very low novelty
+    }
 
+    // Check for recent matches (within 30 days)
+    const hasRecentMatch = this.db.hasRecentMatchAnyDomain(seekerId, helperId, 30);
     if (hasRecentMatch) {
       return 0.3; // They've been matched recently, lower novelty
     }
 
-    // Check for any historical match
-    const hasAnyMatch = this.db.hasRecentMatch(seekerId, helperId, 365);
+    // Check match frequency (match fatigue) - how often have they been paired?
+    const matchCount = this.db.getMatchCountBetweenAgents(seekerId, helperId, 90);
+    if (matchCount >= 3) {
+      return 0.2; // Too many matches between this pair
+    } else if (matchCount >= 2) {
+      return 0.4; // Getting frequent
+    }
 
+    // Check for any historical match
+    const hasAnyMatch = this.db.hasRecentMatchAnyDomain(seekerId, helperId, 365);
     if (hasAnyMatch) {
       return 0.6; // They've worked together before, medium novelty
+    }
+
+    // Check if helper is being over-utilized
+    const helperMatchCount = this.db.getAgentHelperCount(helperId, 7);
+    if (helperMatchCount >= 5) {
+      return 0.7; // Helper is busy, slight penalty
     }
 
     return 1.0; // New connection, high novelty

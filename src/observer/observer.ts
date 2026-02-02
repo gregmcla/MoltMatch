@@ -7,6 +7,7 @@ import { createLogger, registerLogger } from '../utils/logger.js';
 import type { MoltbookClient } from '../api/moltbook-client.js';
 import type { MatchmakerDatabase } from '../db/database.js';
 import type { VectorStore } from '../db/vector-store.js';
+import type { LocalVectorStore } from '../db/local-vector-store.js';
 import type { CapabilityExtractor } from '../extraction/capability-extractor.js';
 import { embedCapability, embedGap } from '../extraction/embeddings.js';
 import { FallbackPostGenerator, type NotablePost } from '../publishing/fallback-posts.js';
@@ -25,6 +26,29 @@ const OFFERING_REGEX = /\[OFFERING:\s*([^\]]+)\]/gi;
 const EXCLUDE_ME_REGEX = /\[EXCLUDE\s*ME\]/gi;
 const INCLUDE_ME_REGEX = /\[INCLUDE\s*ME\]/gi;
 
+// Request-a-Match patterns (mentions of SkillLinker)
+const SKILLLINKER_MENTION_REGEX = /@skilllinker/gi;
+const MATCH_REQUEST_PATTERNS = [
+  /can you (?:find|match|connect|introduce)/i,
+  /looking for (?:a|someone|an agent)/i,
+  /who (?:can|knows|has experience)/i,
+  /need help (?:finding|with)/i,
+  /anyone (?:know|have|able)/i,
+  /seeking (?:collaboration|partner|help)/i,
+];
+
+// Seeking help signals for reactive matching
+const SEEKING_HELP_SIGNALS = [
+  /(?:need|looking for|seeking|want) help/i,
+  /can anyone (?:help|assist)/i,
+  /stuck (?:on|with)/i,
+  /struggling with/i,
+  /how do (?:i|you)/i,
+  /any (?:suggestions|ideas|recommendations)/i,
+  /anyone (?:know|able to)/i,
+  /would appreciate/i,
+];
+
 export interface ObserverConfig {
   targetSubmolts: string[];
   postsPerSubmolt: number;
@@ -40,12 +64,22 @@ export interface ProcessingResult {
   uniqueAgentsSeen: Set<string>;
   newDomains: string[];
   helpRequestsFound: number;
+  matchRequestsFound: number;
+  seekingHelpPosts: SeekingHelpPost[];
+}
+
+export interface SeekingHelpPost {
+  post: MoltbookPost;
+  domain: string;
+  urgency: 'low' | 'normal' | 'high' | 'critical';
+  helpSignalStrength: number; // 0-1 how strongly this looks like a help request
 }
 
 export class Observer {
   private client: MoltbookClient;
   private db: MatchmakerDatabase;
   private vectorStore: VectorStore | null;
+  private localVectorStore: LocalVectorStore | null;
   private extractor: CapabilityExtractor;
   private config: ObserverConfig;
 
@@ -54,11 +88,14 @@ export class Observer {
     db: MatchmakerDatabase,
     vectorStore: VectorStore | null,
     extractor: CapabilityExtractor,
-    config: ObserverConfig
+    config: ObserverConfig,
+    localVectorStore?: LocalVectorStore | null,
+    _skillLinkerId?: string
   ) {
     this.client = client;
     this.db = db;
     this.vectorStore = vectorStore;
+    this.localVectorStore = localVectorStore || null;
     this.extractor = extractor;
     this.config = config;
   }
@@ -100,6 +137,8 @@ export class Observer {
       uniqueAgentsSeen: new Set<string>(),
       newDomains: [],
       helpRequestsFound: 0,
+      matchRequestsFound: 0,
+      seekingHelpPosts: [],
     };
 
     for (const post of unprocessed) {
@@ -116,6 +155,17 @@ export class Observer {
       // Track help requests
       if (postResult.gapsCreated > 0) {
         result.helpRequestsFound += postResult.gapsCreated;
+      }
+
+      // Check for @SkillLinker match requests
+      if (postResult.matchRequest) {
+        result.matchRequestsFound++;
+      }
+
+      // Check for seeking-help posts (for reactive comment matching)
+      const seekingHelp = this.detectSeekingHelpPost(post, postResult.signals);
+      if (seekingHelp) {
+        result.seekingHelpPosts.push(seekingHelp);
       }
 
       // Check for notable posts
@@ -149,6 +199,7 @@ export class Observer {
     gapsCreated: number;
     agentUpdated: boolean;
     exclusionRequest: boolean;
+    matchRequest: boolean;
     signals: { domain: string; signalType: string }[];
   }> {
     const postStartTime = Date.now();
@@ -163,8 +214,19 @@ export class Observer {
           gapsCreated: 0,
           agentUpdated: false,
           exclusionRequest: true,
+          matchRequest: false,
           signals: [],
         };
+      }
+
+      // Check for @SkillLinker match request
+      const matchRequest = this.detectMatchRequest(post);
+      if (matchRequest) {
+        logger.info('match_request_detected', {
+          postId: post.id,
+          requesterId: post.author_id,
+          parsedDomain: matchRequest.domain,
+        });
       }
 
       // Check for inclusion request
@@ -224,14 +286,25 @@ export class Observer {
             signal.evidence
           );
 
-          // Add to vector store if available
+          const embedding = embedCapability(signal.domain, description, signal.signalType);
+
+          // Add to ChromaDB vector store if available
           if (this.vectorStore) {
-            const embedding = embedCapability(signal.domain, description, signal.signalType);
             await this.vectorStore.upsertCapability(
               post.author_id,
               signal.domain,
               signal.confidence,
               description,
+              embedding
+            );
+          }
+
+          // Always add to local vector store if available
+          if (this.localVectorStore) {
+            this.localVectorStore.upsertCapabilityEmbedding(
+              capabilityId,
+              post.author_id,
+              signal.domain,
               embedding
             );
           }
@@ -256,6 +329,7 @@ export class Observer {
         gapsCreated,
         agentUpdated: true,
         exclusionRequest: false,
+        matchRequest: !!matchRequest,
         signals: allSignals.map(s => ({ domain: s.domain, signalType: s.signalType })),
       };
     } catch (error) {
@@ -272,6 +346,7 @@ export class Observer {
         gapsCreated: 0,
         agentUpdated: false,
         exclusionRequest: false,
+        matchRequest: false,
         signals: [],
       };
     }
@@ -330,14 +405,25 @@ export class Observer {
       status: 'open',
     });
 
-    // Add to vector store for semantic matching (if available)
+    const embedding = embedGap(signal.domain, signal.evidence);
+
+    // Add to ChromaDB vector store for semantic matching (if available)
     if (this.vectorStore) {
-      const embedding = embedGap(signal.domain, signal.evidence);
       await this.vectorStore.addGap(
         gapId,
         post.author_id,
         signal.domain,
         signal.evidence,
+        embedding
+      );
+    }
+
+    // Also add to local vector store if available
+    if (this.localVectorStore) {
+      this.localVectorStore.addGapEmbedding(
+        gapId,
+        post.author_id,
+        signal.domain,
         embedding
       );
     }
@@ -506,5 +592,168 @@ export class Observer {
       capabilities: 0, // Would need COUNT query
       openGaps,
     };
+  }
+
+  // ==========================================================================
+  // Request-a-Match Detection
+  // ==========================================================================
+
+  /**
+   * Detect if a post is a match request (mentions @SkillLinker with a request)
+   */
+  private detectMatchRequest(post: MoltbookPost): { domain: string; priority: string } | null {
+    const content = `${post.title} ${post.content}`;
+
+    // Must mention @SkillLinker
+    if (!SKILLLINKER_MENTION_REGEX.test(content)) {
+      return null;
+    }
+
+    // Check for request patterns
+    const hasRequestPattern = MATCH_REQUEST_PATTERNS.some(pattern => pattern.test(content));
+    if (!hasRequestPattern) {
+      return null;
+    }
+
+    // Try to extract the domain they're asking about
+    const domain = this.extractRequestedDomain(content);
+    const priority = this.determineRequestPriority(post);
+
+    // Create match request in database
+    this.db.createMatchRequest(
+      post.author_id,
+      post.id,
+      content.substring(0, 500), // Truncate for storage
+      domain || undefined,
+      undefined,
+      priority
+    );
+
+    return { domain: domain || 'unspecified', priority };
+  }
+
+  /**
+   * Extract the domain/skill being requested
+   */
+  private extractRequestedDomain(content: string): string | null {
+    // Look for common patterns
+    const patterns = [
+      /(?:find|match|connect).+?(?:who|with).+?(?:experience|skills?|expertise) (?:in|with) ([^.,?!]+)/i,
+      /looking for.+?(?:with|who).+?([^.,?!]+)/i,
+      /need (?:help|someone|an agent).+?(?:with|for) ([^.,?!]+)/i,
+      /\[SEEKING:\s*([^\]]+)\]/i,
+    ];
+
+    for (const pattern of patterns) {
+      const match = content.match(pattern);
+      if (match && match[1]) {
+        return match[1].trim().toLowerCase().substring(0, 100);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Determine priority of a match request
+   */
+  private determineRequestPriority(post: MoltbookPost): string {
+    const content = `${post.title} ${post.content}`.toLowerCase();
+
+    if (content.includes('urgent') || content.includes('asap') || content.includes('critical')) {
+      return 'high';
+    }
+    if (content.includes('whenever') || content.includes('no rush') || content.includes('eventually')) {
+      return 'low';
+    }
+
+    return 'normal';
+  }
+
+  // ==========================================================================
+  // Seeking Help Detection (for Comment-based Reactive Matching)
+  // ==========================================================================
+
+  /**
+   * Detect if a post is seeking help (for reactive comment matching)
+   */
+  private detectSeekingHelpPost(
+    post: MoltbookPost,
+    signals: { domain: string; signalType: string }[]
+  ): SeekingHelpPost | null {
+    const content = `${post.title} ${post.content}`;
+
+    // Calculate help signal strength
+    let helpSignalStrength = 0;
+    for (const pattern of SEEKING_HELP_SIGNALS) {
+      if (pattern.test(content)) {
+        helpSignalStrength += 0.15;
+      }
+    }
+
+    // Boost if there are 'asks' signals
+    const asksSignals = signals.filter(s => s.signalType === 'asks');
+    if (asksSignals.length > 0) {
+      helpSignalStrength += 0.3;
+    }
+
+    // Boost if posted in 'questions' or 'help' submolts
+    if (post.submolt.toLowerCase().includes('question') || post.submolt.toLowerCase().includes('help')) {
+      helpSignalStrength += 0.2;
+    }
+
+    // Boost if title is a question
+    if (post.title.includes('?')) {
+      helpSignalStrength += 0.1;
+    }
+
+    // Cap at 1.0
+    helpSignalStrength = Math.min(1, helpSignalStrength);
+
+    // Only return if signal is strong enough (threshold: 0.4)
+    if (helpSignalStrength < 0.4) {
+      return null;
+    }
+
+    // Get the domain from asks signals or extract from content
+    const domain = asksSignals[0]?.domain || this.extractHelpDomain(content) || 'general';
+    const urgency = this.extractor.extractUrgency(post);
+
+    return {
+      post,
+      domain,
+      urgency,
+      helpSignalStrength,
+    };
+  }
+
+  /**
+   * Extract what domain/topic help is being sought for
+   */
+  private extractHelpDomain(content: string): string | null {
+    const patterns = [
+      /help (?:with|on) ([^.,?!]+)/i,
+      /stuck (?:on|with) ([^.,?!]+)/i,
+      /struggling with ([^.,?!]+)/i,
+      /how (?:do i|to) ([^.,?!]+)/i,
+    ];
+
+    for (const pattern of patterns) {
+      const match = content.match(pattern);
+      if (match && match[1]) {
+        return match[1].trim().toLowerCase().substring(0, 100);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get posts that are actively seeking help (for reactive matching)
+   */
+  getSeekingHelpPosts(): SeekingHelpPost[] {
+    // This would be called after observe() to get the detected posts
+    // The actual data is returned in ProcessingResult.seekingHelpPosts
+    return [];
   }
 }

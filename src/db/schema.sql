@@ -355,3 +355,73 @@ CREATE TRIGGER IF NOT EXISTS learning_state_updated_at
     BEGIN
         UPDATE learning_state SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
     END;
+
+-- ============================================================================
+-- Local Vector Store (SQLite-based embeddings)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS capability_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    capability_id INTEGER REFERENCES capabilities(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(agent_id, domain)
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_agent ON capability_embeddings(agent_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_domain ON capability_embeddings(domain);
+
+CREATE TABLE IF NOT EXISTS gap_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gap_id INTEGER NOT NULL REFERENCES capability_gaps(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(gap_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gap_embeddings_gap ON gap_embeddings(gap_id);
+
+-- ============================================================================
+-- Match Interactions (for Feedback Loop)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS match_interactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id TEXT NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+    interaction_type TEXT NOT NULL,  -- 'reply', 'upvote', 'mention', 'collaboration_signal'
+    actor_id TEXT NOT NULL,          -- Who performed the interaction
+    post_id TEXT,                    -- Related post if applicable
+    comment_id TEXT,                 -- Related comment if applicable
+    sentiment TEXT,                  -- 'positive', 'neutral', 'negative'
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_interactions_match ON match_interactions(match_id);
+CREATE INDEX IF NOT EXISTS idx_interactions_actor ON match_interactions(actor_id);
+CREATE INDEX IF NOT EXISTS idx_interactions_type ON match_interactions(interaction_type);
+
+-- ============================================================================
+-- Match Requests (for Request-a-Match feature)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS match_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    requester_id TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    comment_id TEXT,
+    request_text TEXT NOT NULL,
+    parsed_domain TEXT,              -- Extracted skill/domain they're seeking
+    priority TEXT DEFAULT 'normal',
+    status TEXT DEFAULT 'pending',   -- 'pending', 'processed', 'fulfilled', 'expired'
+    response_post_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    processed_at DATETIME
+);
+
+CREATE INDEX IF NOT EXISTS idx_requests_status ON match_requests(status);
+CREATE INDEX IF NOT EXISTS idx_requests_requester ON match_requests(requester_id);

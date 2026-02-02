@@ -193,6 +193,11 @@ export class FallbackPostGenerator {
         jsonText = jsonMatch[0];
       }
 
+      // Fix common JSON issues from LLM output:
+      // 1. Replace unescaped newlines inside strings with \n
+      // 2. Handle multiline content fields
+      jsonText = this.sanitizeJsonString(jsonText);
+
       const parsed = JSON.parse(jsonText);
 
       // Validate required fields
@@ -210,6 +215,121 @@ export class FallbackPostGenerator {
       logger.warn('fallback_post_parse_failed', {
         error: (error as Error).message,
       });
+
+      // Fallback: try to extract fields manually
+      return this.extractFieldsManually(text);
+    }
+  }
+
+  /**
+   * Sanitize JSON string to handle unescaped newlines in content
+   */
+  private sanitizeJsonString(json: string): string {
+    // Find the content field and escape newlines within it
+    // This regex finds "content": "..." and escapes newlines inside the string value
+    let result = json;
+
+    // Replace literal newlines inside JSON string values with \n
+    // This is a simplified approach - find strings and escape their newlines
+    let inString = false;
+    let escaped = false;
+    let sanitized = '';
+
+    for (let i = 0; i < result.length; i++) {
+      const char = result[i];
+
+      if (escaped) {
+        sanitized += char;
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        sanitized += char;
+        escaped = true;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = !inString;
+        sanitized += char;
+        continue;
+      }
+
+      if (inString && char === '\n') {
+        sanitized += '\\n';
+        continue;
+      }
+
+      if (inString && char === '\r') {
+        sanitized += '\\r';
+        continue;
+      }
+
+      if (inString && char === '\t') {
+        sanitized += '\\t';
+        continue;
+      }
+
+      sanitized += char;
+    }
+
+    return sanitized;
+  }
+
+  /**
+   * Manually extract fields if JSON parsing fails
+   */
+  private extractFieldsManually(text: string): FallbackPost | null {
+    try {
+      // Try to extract type
+      const typeMatch = text.match(/"type"\s*:\s*"([^"]+)"/);
+      const type = typeMatch?.[1] as FallbackPostType;
+
+      // Try to extract title
+      const titleMatch = text.match(/"title"\s*:\s*"([^"]+)"/);
+      const title = titleMatch?.[1];
+
+      // Try to extract content - this is the tricky one with newlines
+      // Look for "content": " and find the closing "
+      const contentStart = text.indexOf('"content"');
+      if (contentStart === -1) return null;
+
+      const colonPos = text.indexOf(':', contentStart);
+      if (colonPos === -1) return null;
+
+      const quoteStart = text.indexOf('"', colonPos + 1);
+      if (quoteStart === -1) return null;
+
+      // Find the end quote (not escaped)
+      let quoteEnd = quoteStart + 1;
+      while (quoteEnd < text.length) {
+        if (text[quoteEnd] === '"' && text[quoteEnd - 1] !== '\\') {
+          break;
+        }
+        quoteEnd++;
+      }
+
+      let content = text.slice(quoteStart + 1, quoteEnd);
+      // Unescape the content
+      content = content.replace(/\\n/g, '\n').replace(/\\"/g, '"');
+
+      // Try to extract submolt
+      const submoltMatch = text.match(/"submolt"\s*:\s*"([^"]+)"/);
+      const submolt = submoltMatch?.[1] || 'aithoughts';
+
+      if (type && title && content) {
+        logger.info('fallback_post_extracted_manually', { type, titleLength: title.length });
+        return {
+          type,
+          title: title.slice(0, 80),
+          content,
+          submolt,
+        };
+      }
+
+      return null;
+    } catch {
       return null;
     }
   }

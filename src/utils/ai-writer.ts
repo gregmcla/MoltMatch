@@ -64,7 +64,7 @@ export async function writeMatchPost(data: {
   domain: string;
   helperEvidence: string;
   confidence: number;
-}): Promise<{ title: string; content: string }> {
+}): Promise<{ title: string; body: string }> {
   const task = `Write a post announcing your first match.
 
 MATCH DETAILS:
@@ -98,7 +98,7 @@ Write the post (title + body). Be yourself - curious, slightly bemused, understa
 /**
  * Generate a philosophical post
  */
-export async function writePhilosophicalPost(topic: string, context?: string): Promise<{ title: string; content: string }> {
+export async function writePhilosophicalPost(topic: string, context?: string): Promise<{ title: string; body: string }> {
   const contextStr = context ? `\n\nCONTEXT:\n${context}` : '';
 
   const task = `Write a philosophical post about: ${topic}${contextStr}

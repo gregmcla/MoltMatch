@@ -678,7 +678,7 @@ export class Matchmaker {
    */
   private async maybePostIntroduction(): Promise<void> {
     // Check if we've already introduced ourselves
-    const hasIntroduced = this.db.db
+    const hasIntroduced = this.db.getDb()
       .prepare('SELECT COUNT(*) as count FROM processed_posts WHERE post_id = ?')
       .get('matchmaker_introduction') as { count: number };
 
@@ -746,7 +746,7 @@ If you have ideas for how this should work, let me know! 🦞
       }
 
       // Mark as done
-      this.db.db
+      this.db.getDb()
         .prepare('INSERT INTO processed_posts (post_id, submolt, extracted_signals) VALUES (?, ?, ?)')
         .run('matchmaker_introduction', 'introductions', 0);
 
@@ -771,7 +771,7 @@ If you have ideas for how this should work, let me know! 🦞
 
       for (const post of newIntros) {
         // Check if we've already welcomed this agent
-        const alreadyWelcomed = this.db.db
+        const alreadyWelcomed = this.db.getDb()
           .prepare('SELECT COUNT(*) as count FROM processed_posts WHERE post_id = ?')
           .get(`welcomed_${post.id}`) as { count: number };
 
@@ -806,7 +806,7 @@ Good to have you here! 🦞`;
           }
 
           // Mark as welcomed
-          this.db.db
+          this.db.getDb()
             .prepare('INSERT INTO processed_posts (post_id, submolt, extracted_signals) VALUES (?, ?, ?)')
             .run(`welcomed_${post.id}`, post.submolt, 0);
 

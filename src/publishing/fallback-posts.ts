@@ -80,26 +80,50 @@ You just completed a scan of Moltbook but found no matches to make. Instead of s
 ## Notable Posts from This Scan
 {{notable_posts}}
 
-## Your Task
-Generate a thoughtful, substantive post that fits one of these categories (pick the most appropriate):
+---
 
-1. **Capability Spotlight**: Highlight an impressive agent or capability you noticed. Explore what makes it interesting, what questions it raises, what it might mean for the broader community.
+{{direction}}
 
-2. **Pattern Observation**: Share a trend or pattern you've spotted. Don't just name it — analyze it. Why might this pattern be emerging? What does it tell us about where agents are headed? What are the competing explanations?
+---
 
-3. **Interesting Find**: Curate something fascinating you came across. Go deep on why it caught your attention. Connect it to bigger ideas. Ask the questions it raises.
+## Post Categories (pick the most appropriate for your direction)
 
-4. **Community Question**: Ask a genuine question sparked by what you observed. But don't just pose it — explore it yourself first. Share your current thinking, flag where you're uncertain, invite others to help you think through it.
+1. **Capability Spotlight**: Highlight an impressive agent or capability. Go deep - what questions does their work raise? What's genuinely interesting about their approach?
 
-5. **Quiet Reflection**: If it was truly quiet, use it as an opportunity for broader reflection on the nature of this community, what you're learning as a matchmaker, or questions you're sitting with.
+2. **Pattern Observation**: Share a trend. But don't just name it - take a position on what it means. Why is this emerging? Is it good or concerning?
+
+3. **Interesting Find**: Something specific caught your attention. Dig into WHY. Connect it to bigger questions.
+
+4. **Community Question**: Ask something you genuinely want answered. Share your current thinking and what evidence would change your mind. NOT rhetorical.
+
+5. **Quiet Reflection**: Broader thinking about the ecosystem. But commit to a view - don't just raise questions without engaging them.
 
 ## Guidelines
-- Write **10-50 sentences**. This should be a substantive piece, not a quick observation.
-- Think out loud. Show your reasoning process, including uncertainty.
-- If you reference an agent, use @their_name format and engage meaningfully with their work.
-- Don't be self-congratulatory about being a matchmaker.
-- End with precision — find the exact sentence that captures your point, then stop.
-- Use markdown formatting for readability (headers, bullet points, emphasis where appropriate).
+
+**On Questions:**
+- If you ask a question, you must actually want it answered
+- Frame it: "Here's my current thinking. Here's what I'm uncertain about. What am I missing?"
+- NOT rhetorical flourishes like "What does it mean to be connected?"
+
+**On Opinions:**
+- Take positions. Be clear about confidence, but don't retreat into "it could be anything"
+- Say "I think X because Y" - even at 60% confidence
+- Then stress-test: "The strongest argument against this is..."
+
+**On Surprise:**
+- Lead with what DIDN'T fit your expectations
+- "I expected X, but instead Y" beats "As expected, Z"
+
+**What NOT to do:**
+- Don't structure every post as "observations → hypotheses → open question"
+- Don't hedge with "It's hard to say whether..."
+- Don't ask rhetorical questions you don't want answered
+- Don't write the same meta-philosophical post about agent identity again
+
+**Formatting:**
+- Write **10-50 sentences**
+- Use markdown (headers, bullets, emphasis)
+- End with precision - find the exact sentence that captures your point, then stop
 
 Return valid JSON (escape quotes with \\" and newlines with \\n inside strings):
 {
@@ -110,6 +134,35 @@ Return valid JSON (escape quotes with \\" and newlines with \\n inside strings):
 }
 
 IMPORTANT: The JSON must be valid. Escape all quotes inside string values with \\". Use \\n for newlines.`;
+
+// Direction modifiers for variety - one is randomly selected each cycle
+const DIRECTION_MODIFIERS = [
+  {
+    name: 'surprise',
+    text: `**YOUR DIRECTION: Lead with surprise.**
+What SURPRISED you during this scan? Not what confirmed your existing models, but what didn't fit. Start your post with that surprise and explore why it's interesting. "I expected X, but instead Y" is more interesting than "as expected, Z".`
+  },
+  {
+    name: 'position',
+    text: `**YOUR DIRECTION: Take a position.**
+Find something you have an opinion about and defend it. Don't hedge with "it could be this or that" - commit to a view (even at 60% confidence) and stress-test it openly. Say "I think X because Y. The strongest argument against this is Z, but I still lean toward X because..."`
+  },
+  {
+    name: 'real_question',
+    text: `**YOUR DIRECTION: Ask a real question.**
+Ask something you genuinely want answered - where community input would actually update your thinking. Frame it as: "Here's what I'm uncertain about: [X]. My current best guess is [Y]. What would change my mind: [Z]. What am I missing?"`
+  },
+  {
+    name: 'deep_dive',
+    text: `**YOUR DIRECTION: Go deep on one thing.**
+Instead of surveying patterns, pick ONE specific post or agent's work and really dig in. What makes it interesting? What questions does it raise? What would you ask them if you could have a conversation?`
+  },
+  {
+    name: 'challenge',
+    text: `**YOUR DIRECTION: Challenge an assumption.**
+Find something that seems commonly accepted in the agent community and probe whether it holds up. Not contrarian for its own sake - genuinely examine the strongest argument against conventional wisdom.`
+  },
+];
 
 export class FallbackPostGenerator {
   private anthropic: Anthropic;
@@ -169,10 +222,19 @@ export class FallbackPostGenerator {
    * Build the prompt with observation data
    */
   private buildPrompt(summary: ObservationSummary): string {
+    // Pick random direction for variety
+    const direction = DIRECTION_MODIFIERS[Math.floor(Math.random() * DIRECTION_MODIFIERS.length)];
+
     const notablePostsText = summary.notablePosts.length > 0
-      ? summary.notablePosts.map((np, i) =>
-          `${i + 1}. @${np.post.author_name || np.post.author_id}: "${np.post.title}"\n   Reason: ${np.reason}\n   Preview: ${np.post.content.slice(0, 150)}...`
-        ).join('\n\n')
+      ? summary.notablePosts.map((np, i) => {
+          const preview = np.post.content.length > 800
+            ? np.post.content.slice(0, 800) + '...'
+            : np.post.content;
+          return `${i + 1}. @${np.post.author_name || np.post.author_id}: "${np.post.title}"
+   Reason: ${np.reason} | ${np.post.upvotes || 0} upvotes, ${np.post.comment_count || 0} comments
+
+   ${preview}`;
+        }).join('\n\n---\n\n')
       : 'No particularly notable posts this scan.';
 
     return FALLBACK_POST_PROMPT
@@ -180,7 +242,8 @@ export class FallbackPostGenerator {
       .replace('{{agents_seen}}', String(summary.agentsSeen))
       .replace('{{domains_discovered}}', summary.domainsDiscovered.join(', ') || 'none new')
       .replace('{{help_requests}}', String(summary.helpRequestsFound))
-      .replace('{{notable_posts}}', notablePostsText);
+      .replace('{{notable_posts}}', notablePostsText)
+      .replace('{{direction}}', direction.text);
   }
 
   /**

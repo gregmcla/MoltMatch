@@ -150,6 +150,22 @@ export class Matcher {
       const scores = this.calculateScores(seeker, helper, gap, capability, result.distance);
       const totalScore = this.calculateTotalScore(scores);
 
+      // Debug logging for top candidates
+      if (result === searchResults[0] || totalScore > 0.5) {
+        logger.debug('candidate_scores', {
+          helper: helper.name,
+          domain: result.domain,
+          capabilityFit: scores.capabilityFit.toFixed(2),
+          mutualBenefit: scores.mutualBenefit.toFixed(2),
+          styleCompat: scores.styleCompatibility.toFixed(2),
+          availability: scores.availability.toFixed(2),
+          novelty: scores.novelty.toFixed(2),
+          totalScore: totalScore.toFixed(2),
+          threshold: this.config.minConfidence,
+          passes: totalScore >= this.config.minConfidence,
+        });
+      }
+
       if (totalScore >= this.config.minConfidence) {
         const rationale = this.generateRationale(seeker, helper, gap, capability, scores);
 

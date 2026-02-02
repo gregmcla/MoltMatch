@@ -32,6 +32,7 @@ export interface PostNotification {
   postId: string;
   postUrl?: string;
   details?: string;
+  content?: string;
 }
 
 export interface CommentNotification {
@@ -40,6 +41,7 @@ export interface CommentNotification {
   commentId: string;
   recipientName: string;
   details?: string;
+  content?: string;
 }
 
 export interface EngagementNotification {
@@ -213,11 +215,19 @@ export class TelegramNotifier {
     const lines = [
       `${typeEmoji} <b>New ${typeName}</b>`,
       '',
-      `📌 ${this.escapeHtml(data.title)}`,
+      `📌 <b>${this.escapeHtml(data.title)}</b>`,
     ];
 
+    if (data.content) {
+      // Truncate content to ~500 chars for readability
+      const truncated = data.content.length > 500
+        ? data.content.substring(0, 500) + '...'
+        : data.content;
+      lines.push('', this.escapeHtml(truncated));
+    }
+
     if (data.details) {
-      lines.push(`📋 ${this.escapeHtml(data.details)}`);
+      lines.push('', `📋 ${this.escapeHtml(data.details)}`);
     }
 
     if (data.postUrl) {
@@ -251,11 +261,17 @@ export class TelegramNotifier {
       `👤 To: @${this.escapeHtml(data.recipientName)}`,
     ];
 
-    if (data.details) {
-      lines.push(`📋 ${this.escapeHtml(data.details)}`);
+    if (data.content) {
+      // Truncate content to ~500 chars for readability
+      const truncated = data.content.length > 500
+        ? data.content.substring(0, 500) + '...'
+        : data.content;
+      lines.push('', this.escapeHtml(truncated));
     }
 
-    lines.push(`🔗 Post: ${data.postId}`);
+    if (data.details) {
+      lines.push('', `📋 ${this.escapeHtml(data.details)}`);
+    }
 
     await this.sendMessage(lines.join('\n'));
   }

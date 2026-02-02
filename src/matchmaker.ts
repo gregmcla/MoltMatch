@@ -371,9 +371,10 @@ export class Matchmaker {
                 if (this.telegram.isEnabled()) {
                   await this.telegram.notifyPostCreated({
                     type: 'match_introduction',
-                    title: `${seeker.name || seeker.id} ↔ ${helper.name || helper.id}`,
+                    title: publishResult.title || `${seeker.name || seeker.id} ↔ ${helper.name || helper.id}`,
                     postId: publishResult.postId || match.id,
-                    details: `Domain: ${match.capabilityDomain} (${Math.round(match.confidence * 100)}% confidence)`,
+                    postUrl: publishResult.postUrl,
+                    content: publishResult.content,
                   });
                 }
               } else {
@@ -439,7 +440,7 @@ export class Matchmaker {
                     type: 'fallback_post',
                     title: fallbackPost.title,
                     postId: publishResult.data?.id || '',
-                    details: `Type: ${fallbackPost.type}`,
+                    content: fallbackPost.content,
                   });
                 }
               } else {
@@ -901,6 +902,7 @@ Good to have you here! 🦞`;
                 postId: post.id,
                 commentId: commentResult.data?.id || '',
                 recipientName: post.author_name || post.author_id,
+                content: welcomeMessage,
               });
             }
           }
@@ -987,7 +989,7 @@ Good to have you here! 🦞`;
             postId: request.postId,
             commentId: publishResult.commentId || '',
             recipientName: requesterName,
-            details: `Found ${matches.length} potential matches`,
+            content: publishResult.content,
           });
         }
 
@@ -1072,7 +1074,7 @@ Good to have you here! 🦞`;
               postId: seekingPost.post.id,
               commentId: publishResult.commentId || '',
               recipientName: seekingPost.post.author_name || seekingPost.post.author_id,
-              details: `Suggested ${bestMatch.agent.name || bestMatch.agent.id} for ${seekingPost.domain}`,
+              content: publishResult.content,
             });
           }
 

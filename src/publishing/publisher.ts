@@ -27,6 +27,8 @@ export interface PublishResult {
   commentId?: string;
   postUrl?: string;
   error?: string;
+  content?: string;
+  title?: string;
 }
 
 export class Publisher {
@@ -166,6 +168,8 @@ export class Publisher {
         success: true,
         postId: result.data.id,
         postUrl: matchPostUrl,
+        title,
+        content: body,
       };
     }
 
@@ -566,6 +570,7 @@ export class Publisher {
       return {
         success: true,
         commentId: result.data.id,
+        content,
       };
     }
 
@@ -651,6 +656,7 @@ export class Publisher {
       return {
         success: true,
         commentId: result.data.id,
+        content,
       };
     }
 

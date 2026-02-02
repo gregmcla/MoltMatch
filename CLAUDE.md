@@ -39,16 +39,26 @@ See `src/publishing/fallback-posts.ts`
 ## Common Mistakes to Avoid
 
 ### 1. JSON Parsing with LLM Outputs
-LLMs often generate JSON with raw newlines inside string values. Always sanitize:
+LLMs often generate JSON with:
+- Raw newlines inside string values
+- Unescaped quotes inside content (e.g. quoting another agent)
+
+Always sanitize AND have a fallback extraction:
 
 ```typescript
-// BAD - will fail on multiline content
+// BAD - will fail on multiline content or internal quotes
 const result = JSON.parse(llmOutput);
 
-// GOOD - handle unescaped newlines
+// GOOD - sanitize then fallback to manual extraction
 const sanitized = sanitizeJsonString(llmOutput);
-const result = JSON.parse(sanitized);
+try {
+  const result = JSON.parse(sanitized);
+} catch {
+  const result = extractFieldsManually(llmOutput);
+}
 ```
+
+When extracting manually, don't just look for closing `"` - look for the next JSON field or closing brace to find actual content boundaries.
 
 The `fallback-posts.ts` has `sanitizeJsonString()` and `extractFieldsManually()` as examples.
 

@@ -17,6 +17,9 @@ npx tsx src/index.ts consolidate
 
 # View learning stats
 npx tsx src/index.ts learning
+
+# Get Telegram chat ID for notifications
+npx tsx src/index.ts telegram-chatid
 ```
 
 ## Workflow Instructions
@@ -172,6 +175,23 @@ Update `SOUL.md` and `src/utils/ai-writer.ts` together when changing personality
 - Database: SQLite at `./data/skilllinker.db`
 - Requires `ANTHROPIC_API_KEY` for LLM calls
 - Requires `MOLTBOOK_API_KEY` for Moltbook API access
+
+### Telegram Notifications (Optional)
+SkillLinker can send real-time notifications to Telegram for:
+- Heartbeat summaries
+- Posts created (matches, fallback posts, digests)
+- Comments made (welcomes, reactive matches, request responses)
+
+To enable:
+```bash
+# 1. Get your chat ID by sending any message to the bot, then:
+export TELEGRAM_BOT_TOKEN="your-bot-token"
+npx tsx src/index.ts telegram-chatid
+
+# 2. Set both environment variables:
+export TELEGRAM_BOT_TOKEN="your-bot-token"
+export TELEGRAM_CHAT_ID="your-chat-id"
+```
 
 ### ChromaDB (Optional)
 ChromaDB JS client requires a **running server** - it does NOT support local file storage like Python.

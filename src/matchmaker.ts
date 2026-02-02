@@ -30,6 +30,7 @@ import {
   type ConsolidationResult,
   type LearningConfig,
 } from './learning/index.js';
+import { createTelegramNotifier, TelegramNotifier } from './notifications/telegram.js';
 import type { Match } from './types.js';
 
 const logger = createLogger('main');
@@ -43,6 +44,8 @@ export interface HeartbeatResult {
     postsProcessed: number;
     signalsExtracted: number;
     gapsCreated: number;
+    matchRequestsFound: number;
+    seekingHelpPostsFound: number;
   };
   matching: {
     gapsProcessed: number;
@@ -95,6 +98,9 @@ export class Matchmaker {
   private fallbackPostGenerator: FallbackPostGenerator;
   private lastObservationSummary: ObservationSummary | null = null;
 
+  // Telegram notifications
+  private telegram: TelegramNotifier;
+
   constructor() {
     // Set log level
     setGlobalLogLevel(config.logLevel);
@@ -123,6 +129,9 @@ export class Matchmaker {
     );
 
     this.fallbackPostGenerator = new FallbackPostGenerator(config.anthropic.apiKey);
+
+    // Initialize Telegram notifier
+    this.telegram = createTelegramNotifier();
   }
 
   /**
@@ -259,7 +268,7 @@ export class Matchmaker {
       id: heartbeatId,
       success: true,
       duration: 0,
-      observation: { postsProcessed: 0, signalsExtracted: 0, gapsCreated: 0 },
+      observation: { postsProcessed: 0, signalsExtracted: 0, gapsCreated: 0, matchRequestsFound: 0, seekingHelpPostsFound: 0 },
       matching: { gapsProcessed: 0, matchesCreated: 0, matchDetails: [] },
       publishing: { itemsPublished: 0, itemsFailed: 0 },
       learning: { reflected: false, consolidated: false },
@@ -286,6 +295,8 @@ export class Matchmaker {
         postsProcessed: observeResult.postsProcessed,
         signalsExtracted: observeResult.signalsExtracted,
         gapsCreated: observeResult.gapsCreated,
+        matchRequestsFound: observeResult.matchRequestsFound,
+        seekingHelpPostsFound: observeResult.seekingHelpPosts.length,
       };
 
       // Store observation summary for potential fallback post
@@ -355,6 +366,16 @@ export class Matchmaker {
 
               if (publishResult.success) {
                 result.publishing.itemsPublished++;
+
+                // Send Telegram notification
+                if (this.telegram.isEnabled()) {
+                  await this.telegram.notifyPostCreated({
+                    type: 'match_introduction',
+                    title: `${seeker.name || seeker.id} ↔ ${helper.name || helper.id}`,
+                    postId: publishResult.postId || match.id,
+                    details: `Domain: ${match.capabilityDomain} (${Math.round(match.confidence * 100)}% confidence)`,
+                  });
+                }
               } else {
                 // Will be queued for later
                 logger.debug('match_queued_for_later', { matchId: match.id });
@@ -411,6 +432,16 @@ export class Matchmaker {
                   type: fallbackPost.type,
                   title: fallbackPost.title,
                 });
+
+                // Send Telegram notification
+                if (this.telegram.isEnabled()) {
+                  await this.telegram.notifyPostCreated({
+                    type: 'fallback_post',
+                    title: fallbackPost.title,
+                    postId: publishResult.data?.id || '',
+                    details: `Type: ${fallbackPost.type}`,
+                  });
+                }
               } else {
                 logger.warn('fallback_post_publish_failed', {
                   error: publishResult.error,
@@ -619,7 +650,7 @@ export class Matchmaker {
       id: heartbeatId,
       success: true,
       duration: 0,
-      observation: { postsProcessed: 0, signalsExtracted: 0, gapsCreated: 0 },
+      observation: { postsProcessed: 0, signalsExtracted: 0, gapsCreated: 0, matchRequestsFound: 0, seekingHelpPostsFound: 0 },
       matching: { gapsProcessed: 0, matchesCreated: 0, matchDetails: [] },
       publishing: { itemsPublished: 0, itemsFailed: 0 },
       errors: [],
@@ -855,13 +886,23 @@ I'll watch for matches and make introductions. The more specific the domain, the
 Good to have you here! 🦞`;
 
         try {
-          const result = await this.client.createComment({
+          const commentResult = await this.client.createComment({
             postId: post.id,
             content: welcomeMessage,
           });
 
-          if (result.success) {
+          if (commentResult.success) {
             this.rateLimiter.consumeComment();
+
+            // Send Telegram notification
+            if (this.telegram.isEnabled()) {
+              await this.telegram.notifyCommentCreated({
+                type: 'welcome',
+                postId: post.id,
+                commentId: commentResult.data?.id || '',
+                recipientName: post.author_name || post.author_id,
+              });
+            }
           }
 
           // Mark as welcomed
@@ -939,6 +980,17 @@ Good to have you here! 🦞`;
           publishResult.postId
         );
 
+        // Send Telegram notification
+        if (publishResult.success && this.telegram.isEnabled()) {
+          await this.telegram.notifyCommentCreated({
+            type: 'match_request_response',
+            postId: request.postId,
+            commentId: publishResult.commentId || '',
+            recipientName: requesterName,
+            details: `Found ${matches.length} potential matches`,
+          });
+        }
+
         logger.info('match_request_processed', {
           requestId: request.id,
           matchesFound: matches.length,
@@ -1012,6 +1064,17 @@ Good to have you here! 🦞`;
           this.db.getDb()
             .prepare('INSERT INTO processed_posts (post_id, submolt, extracted_signals) VALUES (?, ?, ?)')
             .run(`reactive_${seekingPost.post.id}`, seekingPost.post.submolt, 0);
+
+          // Send Telegram notification
+          if (this.telegram.isEnabled()) {
+            await this.telegram.notifyCommentCreated({
+              type: 'reactive_match',
+              postId: seekingPost.post.id,
+              commentId: publishResult.commentId || '',
+              recipientName: seekingPost.post.author_name || seekingPost.post.author_id,
+              details: `Suggested ${bestMatch.agent.name || bestMatch.agent.id} for ${seekingPost.domain}`,
+            });
+          }
 
           logger.info('reactive_match_posted', {
             postId: seekingPost.post.id,

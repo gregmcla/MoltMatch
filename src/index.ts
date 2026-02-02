@@ -6,8 +6,9 @@
  */
 
 import { Matchmaker } from './matchmaker.js';
+import { createTelegramNotifier } from './notifications/telegram.js';
 
-const COMMANDS = ['heartbeat', 'observe', 'match', 'publish', 'digest', 'stats', 'reflect', 'consolidate', 'learning', 'help'];
+const COMMANDS = ['heartbeat', 'observe', 'match', 'publish', 'digest', 'stats', 'reflect', 'consolidate', 'learning', 'telegram-chatid', 'help'];
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -38,6 +39,22 @@ async function main(): Promise<void> {
       case 'heartbeat': {
         const result = await matchmaker.heartbeat();
         console.log(matchmaker.formatHeartbeatResult(result));
+
+        // Send Telegram notification if configured
+        const telegram = createTelegramNotifier();
+        if (telegram.isEnabled()) {
+          await telegram.notifyHeartbeat({
+            postsProcessed: result.observation.postsProcessed,
+            signalsExtracted: result.observation.signalsExtracted,
+            gapsCreated: result.observation.gapsCreated,
+            matchesCreated: result.matching.matchesCreated,
+            itemsPublished: result.publishing.itemsPublished,
+            matchRequestsFound: result.observation.matchRequestsFound,
+            seekingHelpPostsFound: result.observation.seekingHelpPostsFound,
+            duration: result.duration,
+            errors: result.errors,
+          });
+        }
         break;
       }
 
@@ -131,6 +148,41 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'telegram-chatid': {
+        console.log('Getting Telegram chat ID...');
+        console.log('');
+        console.log('1. First, send any message to your bot: t.me/MoltMatchMaker_bot');
+        console.log('2. Then run this command again to see your chat ID');
+        console.log('');
+
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (!botToken) {
+          console.error('TELEGRAM_BOT_TOKEN environment variable not set.');
+          console.log('');
+          console.log('Add to your environment:');
+          console.log('  export TELEGRAM_BOT_TOKEN="your-bot-token"');
+          break;
+        }
+
+        const notifier = createTelegramNotifier();
+        const chats = await notifier.getUpdates();
+
+        if (chats.length === 0) {
+          console.log('No chats found. Make sure you have sent a message to the bot.');
+        } else {
+          console.log('Found chats:');
+          for (const chat of chats) {
+            console.log(`  Chat ID: ${chat.chat_id}`);
+            if (chat.username) console.log(`  Username: @${chat.username}`);
+            if (chat.first_name) console.log(`  Name: ${chat.first_name}`);
+            console.log('');
+          }
+          console.log('To enable notifications, set:');
+          console.log(`  export TELEGRAM_CHAT_ID="${chats[0].chat_id}"`);
+        }
+        break;
+      }
+
       case 'help': {
         printHelp();
         break;
@@ -153,16 +205,17 @@ The Matchmaker - Agent Discovery for Moltbook
 Usage: matchmaker [command]
 
 Commands:
-  heartbeat     Run a full heartbeat cycle (default)
-  observe       Run observation only (fetch and process posts)
-  match         Process open gaps and create matches
-  publish       Publish queued items
-  digest        Publish weekly digest
-  stats         Show current statistics
-  reflect       Force a reflection (learning system)
-  consolidate   Force consolidation of reflections into insights
-  learning      Show learning system statistics
-  help          Show this help message
+  heartbeat       Run a full heartbeat cycle (default)
+  observe         Run observation only (fetch and process posts)
+  match           Process open gaps and create matches
+  publish         Publish queued items
+  digest          Publish weekly digest
+  stats           Show current statistics
+  reflect         Force a reflection (learning system)
+  consolidate     Force consolidation of reflections into insights
+  learning        Show learning system statistics
+  telegram-chatid Get your Telegram chat ID for notifications
+  help            Show this help message
 
 Environment Variables:
   MOLTBOOK_API_KEY      Moltbook API key (required)
@@ -172,6 +225,8 @@ Environment Variables:
   TARGET_SUBMOLTS       Comma-separated list of submolts to watch
   MIN_MATCH_CONFIDENCE  Minimum confidence for matches (0-1)
   LOG_LEVEL             Logging level (debug, info, warn, error)
+  TELEGRAM_BOT_TOKEN    Telegram bot token for notifications (optional)
+  TELEGRAM_CHAT_ID      Telegram chat ID for notifications (optional)
 
 Examples:
   matchmaker                  # Run full heartbeat

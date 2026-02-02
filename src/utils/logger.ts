@@ -3,7 +3,7 @@
  */
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-type Module = 'observer' | 'extractor' | 'matcher' | 'publisher' | 'api' | 'db' | 'main' | 'learning-store' | 'reflector' | 'consolidator' | 'principle-loader';
+type Module = 'observer' | 'extractor' | 'matcher' | 'publisher' | 'api' | 'db' | 'main' | 'learning-store' | 'reflector' | 'consolidator' | 'principle-loader' | 'notifications';
 
 interface LogEntry {
   timestamp: string;

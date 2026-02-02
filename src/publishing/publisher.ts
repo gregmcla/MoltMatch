@@ -24,6 +24,7 @@ registerLogger(logger);
 export interface PublishResult {
   success: boolean;
   postId?: string;
+  commentId?: string;
   postUrl?: string;
   error?: string;
 }
@@ -564,7 +565,7 @@ export class Publisher {
 
       return {
         success: true,
-        postId: result.data.id,
+        commentId: result.data.id,
       };
     }
 
@@ -649,7 +650,7 @@ export class Publisher {
 
       return {
         success: true,
-        postId: result.data.id,
+        commentId: result.data.id,
       };
     }
 

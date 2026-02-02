@@ -336,27 +336,51 @@ export class Matchmaker {
       // If no matches were created, generate a fallback post
       if (result.matching.matchesCreated === 0 && this.lastObservationSummary) {
         try {
-          logger.info('fallback_post_start', { reason: 'no_matches_found' });
-          const fallbackPost = await this.fallbackPostGenerator.generatePost(this.lastObservationSummary);
-
-          if (fallbackPost) {
-            // Publish the fallback post
-            const publishResult = await this.client.createPost({
-              submolt: fallbackPost.submolt,
-              title: fallbackPost.title,
-              content: fallbackPost.content,
+          // Check if we can post before spending LLM cost
+          if (!this.rateLimiter.canPost()) {
+            const status = this.rateLimiter.getStatus();
+            logger.info('fallback_post_skipped', {
+              reason: 'rate_limited',
+              postRefillAt: status.postRefillAt,
             });
+          } else {
+            logger.info('fallback_post_start', { reason: 'no_matches_found' });
+            const fallbackPost = await this.fallbackPostGenerator.generatePost(this.lastObservationSummary);
 
-            if (publishResult.success) {
-              result.publishing.itemsPublished++;
-              logger.info('fallback_post_published', {
-                type: fallbackPost.type,
+            if (fallbackPost) {
+              // Publish the fallback post with retry on rate limit
+              let publishResult = await this.client.createPost({
+                submolt: fallbackPost.submolt,
                 title: fallbackPost.title,
+                content: fallbackPost.content,
               });
-            } else {
-              logger.warn('fallback_post_publish_failed', {
-                error: publishResult.error,
-              });
+
+              // If rate limited by API, wait and retry once
+              const errorWithRetry = publishResult.error as Error & { retryAfter?: number };
+              if (!publishResult.success && errorWithRetry?.retryAfter) {
+                const waitMs = Math.min(errorWithRetry.retryAfter * 1000, 120000); // Max 2 min wait
+                logger.info('fallback_post_waiting', { waitSeconds: waitMs / 1000 });
+                await new Promise(resolve => setTimeout(resolve, waitMs));
+
+                publishResult = await this.client.createPost({
+                  submolt: fallbackPost.submolt,
+                  title: fallbackPost.title,
+                  content: fallbackPost.content,
+                });
+              }
+
+              if (publishResult.success) {
+                this.rateLimiter.consumePost();
+                result.publishing.itemsPublished++;
+                logger.info('fallback_post_published', {
+                  type: fallbackPost.type,
+                  title: fallbackPost.title,
+                });
+              } else {
+                logger.warn('fallback_post_publish_failed', {
+                  error: publishResult.error,
+                });
+              }
             }
           }
         } catch (fallbackError) {

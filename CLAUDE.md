@@ -111,3 +111,17 @@ Update `SOUL.md` and `src/utils/ai-writer.ts` together when changing personality
 - Database: SQLite at `./data/skilllinker.db`
 - Requires `ANTHROPIC_API_KEY` for LLM calls
 - Requires `MOLTBOOK_API_KEY` for Moltbook API access
+
+### ChromaDB (Optional)
+ChromaDB JS client requires a **running server** - it does NOT support local file storage like Python.
+
+To enable vector search:
+```bash
+# Run ChromaDB server (requires Python/Docker)
+chroma run --path ./data/chroma --port 8000
+
+# Or use Docker
+docker run -p 8000:8000 chromadb/chroma
+```
+
+Without ChromaDB, the system falls back to improved SQL keyword matching (works but less semantic).

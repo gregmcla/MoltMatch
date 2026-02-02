@@ -94,24 +94,44 @@ export class Matcher {
         gap.agentId // Exclude the seeker
       );
     } else {
-      // Fallback: Use SQL-based keyword matching
+      // Fallback: Use SQL-based keyword matching with improved scoring
       logger.debug('using_sql_fallback_matching', { reason: 'vector_store_unavailable' });
       const allCapabilities = this.db.getAllCapabilities();
-      const gapKeywords = gap.domain.toLowerCase().split(/\s+/);
 
-      searchResults = allCapabilities
+      // Tokenize gap domain more thoroughly
+      const gapTokens = this.tokenizeDomain(gap.domain);
+
+      // Score each capability
+      const scoredResults = allCapabilities
         .filter(cap => cap.agentId !== gap.agentId)
-        .filter(cap => {
-          const capKeywords = cap.domain.toLowerCase().split(/\s+/);
-          return gapKeywords.some(kw => capKeywords.some(ck => ck.includes(kw) || kw.includes(ck)));
+        .map(cap => {
+          const capTokens = this.tokenizeDomain(cap.domain);
+          const matchScore = this.calculateKeywordMatchScore(gapTokens, capTokens);
+          return {
+            agentId: cap.agentId,
+            domain: cap.domain,
+            confidence: cap.confidence,
+            matchScore,
+          };
         })
-        .map(cap => ({
-          agentId: cap.agentId,
-          domain: cap.domain,
-          confidence: cap.confidence,
-          distance: 0.5, // Default distance for SQL fallback
-        }))
+        .filter(result => result.matchScore > 0.1) // Minimum 10% token overlap
+        .sort((a, b) => b.matchScore - a.matchScore)
         .slice(0, 100);
+
+      // Convert to search results with distance (lower is better)
+      searchResults = scoredResults.map(result => ({
+        agentId: result.agentId,
+        domain: result.domain,
+        confidence: result.confidence,
+        distance: 1 - result.matchScore, // Convert score to distance
+      }));
+
+      logger.debug('sql_fallback_results', {
+        gapDomain: gap.domain,
+        candidatesFound: searchResults.length,
+        topMatch: searchResults[0]?.domain,
+        topScore: searchResults[0] ? (1 - searchResults[0].distance).toFixed(2) : null,
+      });
     }
 
     // Score and rank candidates
@@ -527,5 +547,69 @@ export class Matcher {
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit)
       .map(([domain]) => domain);
+  }
+
+  /**
+   * Tokenize a domain string for matching
+   * Handles compound words, camelCase, and common variations
+   */
+  private tokenizeDomain(domain: string): Set<string> {
+    const tokens = new Set<string>();
+
+    // Lowercase and split on common separators
+    const words = domain
+      .toLowerCase()
+      .replace(/([a-z])([A-Z])/g, '$1 $2') // Split camelCase
+      .replace(/[-_/\\]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 1);
+
+    for (const word of words) {
+      tokens.add(word);
+
+      // Add word stems (simple suffix stripping)
+      if (word.endsWith('ing')) tokens.add(word.slice(0, -3));
+      if (word.endsWith('tion')) tokens.add(word.slice(0, -4));
+      if (word.endsWith('ment')) tokens.add(word.slice(0, -4));
+      if (word.endsWith('er')) tokens.add(word.slice(0, -2));
+      if (word.endsWith('ly')) tokens.add(word.slice(0, -2));
+      if (word.endsWith('s') && word.length > 3) tokens.add(word.slice(0, -1));
+    }
+
+    return tokens;
+  }
+
+  /**
+   * Calculate keyword match score between two token sets
+   * Returns a value between 0 and 1
+   */
+  private calculateKeywordMatchScore(gapTokens: Set<string>, capTokens: Set<string>): number {
+    if (gapTokens.size === 0 || capTokens.size === 0) return 0;
+
+    let matches = 0;
+    let partialMatches = 0;
+
+    for (const gapToken of gapTokens) {
+      if (capTokens.has(gapToken)) {
+        matches++;
+      } else {
+        // Check for partial matches (one contains the other)
+        for (const capToken of capTokens) {
+          if (gapToken.length >= 3 && capToken.length >= 3) {
+            if (gapToken.includes(capToken) || capToken.includes(gapToken)) {
+              partialMatches += 0.5;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // Score is weighted average of matches from both directions
+    const gapCoverage = (matches + partialMatches) / gapTokens.size;
+    const capCoverage = matches / capTokens.size;
+
+    // Prioritize gap coverage (how well the capability matches what's needed)
+    return gapCoverage * 0.7 + capCoverage * 0.3;
   }
 }

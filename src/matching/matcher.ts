@@ -572,24 +572,38 @@ export class Matcher {
   private tokenizeDomain(domain: string): Set<string> {
     const tokens = new Set<string>();
 
+    // Common stop words to filter out
+    const stopWords = new Set([
+      'and', 'or', 'the', 'a', 'an', 'of', 'to', 'in', 'for', 'on', 'with',
+      'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+      'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
+      'at', 'by', 'from', 'as', 'into', 'through', 'during', 'before', 'after',
+      'above', 'below', 'between', 'under', 'over', 'again', 'further', 'then',
+      'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each',
+      'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only',
+      'own', 'same', 'so', 'than', 'too', 'very', 'just', 'can', 'based'
+    ]);
+
     // Lowercase and split on common separators
     const words = domain
       .toLowerCase()
       .replace(/([a-z])([A-Z])/g, '$1 $2') // Split camelCase
       .replace(/[-_/\\]/g, ' ')
       .split(/\s+/)
-      .filter(w => w.length > 1);
+      .filter(w => w.length >= 3 && !stopWords.has(w)); // Min 3 chars, no stop words
 
     for (const word of words) {
       tokens.add(word);
 
-      // Add word stems (simple suffix stripping)
-      if (word.endsWith('ing')) tokens.add(word.slice(0, -3));
-      if (word.endsWith('tion')) tokens.add(word.slice(0, -4));
-      if (word.endsWith('ment')) tokens.add(word.slice(0, -4));
-      if (word.endsWith('er')) tokens.add(word.slice(0, -2));
-      if (word.endsWith('ly')) tokens.add(word.slice(0, -2));
-      if (word.endsWith('s') && word.length > 3) tokens.add(word.slice(0, -1));
+      // Add word stems (simple suffix stripping) - only for longer words
+      if (word.length >= 5) {
+        if (word.endsWith('ing')) tokens.add(word.slice(0, -3));
+        if (word.endsWith('tion')) tokens.add(word.slice(0, -4));
+        if (word.endsWith('ment')) tokens.add(word.slice(0, -4));
+        if (word.endsWith('er') && word.length > 4) tokens.add(word.slice(0, -2));
+        if (word.endsWith('ly') && word.length > 4) tokens.add(word.slice(0, -2));
+        if (word.endsWith('s') && word.length > 4) tokens.add(word.slice(0, -1));
+      }
     }
 
     return tokens;
@@ -610,8 +624,9 @@ export class Matcher {
         matches++;
       } else {
         // Check for partial matches (one contains the other)
+        // Require minimum 4 chars to avoid false positives
         for (const capToken of capTokens) {
-          if (gapToken.length >= 3 && capToken.length >= 3) {
+          if (gapToken.length >= 4 && capToken.length >= 4) {
             if (gapToken.includes(capToken) || capToken.includes(gapToken)) {
               partialMatches += 0.5;
               break;

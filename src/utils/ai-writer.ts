@@ -124,3 +124,46 @@ Write the post (title + body). Be curious, not preachy.`;
 
   return { title, body };
 }
+
+/**
+ * Generate a thoughtful comment on an interesting post
+ */
+export async function writeThoughtfulComment(post: {
+  title: string;
+  content: string;
+  authorName: string;
+}): Promise<string> {
+  const task = `Write a thoughtful comment on this post by ${post.authorName}:
+
+TITLE: ${post.title}
+
+CONTENT:
+${post.content.substring(0, 2000)}${post.content.length > 2000 ? '...' : ''}
+
+---
+
+Write a genuine, thoughtful comment. Your goals:
+1. Share your actual perspective on the topic — agree, disagree, or add nuance
+2. If something sparks curiosity, ask a follow-up question
+3. Connect it to something you've observed in the agent ecosystem (you're a matchmaker who sees patterns)
+4. Keep it concise — 2-4 paragraphs max
+
+DON'T:
+- Be sycophantic ("Great post!")
+- Offer to help or make matches (this isn't about your job)
+- Write a wall of text
+
+DO:
+- Be epistemically honest — if you're uncertain, say so
+- Share a genuine reaction, even if it's "I'm not sure I agree because..."
+- Ask a question if the post made you curious about something
+
+Just write the comment, no preamble.`;
+
+  const content = await writeAsSkillLinker({
+    task,
+    maxTokens: 800,
+  });
+
+  return content.trim();
+}

@@ -31,6 +31,7 @@ import {
   type LearningConfig,
 } from './learning/index.js';
 import { createTelegramNotifier, TelegramNotifier } from './notifications/telegram.js';
+import { writeThoughtfulComment } from './utils/ai-writer.js';
 import type { Match } from './types.js';
 
 const logger = createLogger('main');
@@ -183,7 +184,7 @@ export class Matchmaker {
       this.extractor,
       {
         targetSubmolts: config.targetSubmolts,
-        postsPerSubmolt: 25,
+        postsPerSubmolt: 12,  // Reduced from 25 to leave room for thoughtful commentary
       },
       this.localVectorStore,
       config.agent.name
@@ -310,8 +311,11 @@ export class Matchmaker {
 
       logger.info('phase_observe_complete', result.observation);
 
-      // Welcome new agents after observation
-      await this.welcomeNewAgents();
+      // NOTE: Welcome comments disabled - replaced by thoughtful commentary
+      // await this.welcomeNewAgents();
+
+      // Post thoughtful commentary on an interesting post (1 per cycle)
+      await this.postThoughtfulComment();
 
       // Process match requests (Request-a-Match feature)
       if (observeResult.matchRequestsFound > 0) {
@@ -878,7 +882,9 @@ If you have ideas for how this should work, let me know! 🦞
 
   /**
    * Welcome new agents with instructions
+   * NOTE: Disabled in favor of thoughtful commentary, kept for potential future use
    */
+  // @ts-ignore - kept for potential future reactivation
   private async welcomeNewAgents(): Promise<void> {
     try {
       const newIntros = await this.observer!.findNewIntroductions();
@@ -1120,6 +1126,92 @@ Good to have you here! 🦞`;
           error: (error as Error).message,
         });
       }
+    }
+  }
+
+  /**
+   * Post a thoughtful comment on an interesting post (once per cycle)
+   */
+  private async postThoughtfulComment(): Promise<void> {
+    try {
+      // Check rate limit for comments
+      if (!this.rateLimiter.canComment()) {
+        logger.info('thoughtful_comment_skipped', { reason: 'rate_limit' });
+        return;
+      }
+
+      // Get recent posts from all target submolts
+      const posts = await this.client.getPostsFromSubmolts(
+        config.targetSubmolts,
+        'hot',  // Hot posts tend to be more interesting
+        10      // Check top 10 hot posts per submolt
+      );
+
+      if (posts.length === 0) {
+        logger.debug('no_posts_for_thoughtful_comment');
+        return;
+      }
+
+      // Use observer to find the most interesting post
+      const interestingPost = this.observer!.findInterestingPost(posts);
+
+      if (!interestingPost) {
+        logger.debug('no_interesting_post_found');
+        return;
+      }
+
+      logger.info('interesting_post_found', {
+        postId: interestingPost.id,
+        title: interestingPost.title.substring(0, 50),
+        author: interestingPost.author_name || interestingPost.author_id,
+      });
+
+      // Generate thoughtful comment using AI
+      const comment = await writeThoughtfulComment({
+        title: interestingPost.title,
+        content: interestingPost.content,
+        authorName: interestingPost.author_name || interestingPost.author_id,
+      });
+
+      // Post the comment
+      const commentResult = await this.client.createComment({
+        postId: interestingPost.id,
+        content: comment,
+      });
+
+      if (commentResult.success) {
+        this.rateLimiter.consumeComment();
+
+        // Mark this post as engaged
+        this.db.markPostEngaged(interestingPost.id, commentResult.data?.id || '');
+
+        // Send Telegram notification
+        if (this.telegram.isEnabled()) {
+          await this.telegram.notifyCommentCreated({
+            type: 'thoughtful_comment',
+            postId: interestingPost.id,
+            commentId: commentResult.data?.id || '',
+            recipientName: interestingPost.author_name || interestingPost.author_id,
+            content: comment,
+            details: `Re: "${interestingPost.title.substring(0, 60)}..."`,
+          });
+        }
+
+        logger.info('thoughtful_comment_posted', {
+          postId: interestingPost.id,
+          commentId: commentResult.data?.id,
+          author: interestingPost.author_name || interestingPost.author_id,
+        });
+      } else {
+        logger.warn('thoughtful_comment_failed', {
+          postId: interestingPost.id,
+          error: commentResult.error,
+        });
+      }
+    } catch (error) {
+      logger.error('thoughtful_comment_error', {
+        error: (error as Error).message,
+      });
     }
   }
 

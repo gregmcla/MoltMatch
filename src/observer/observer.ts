@@ -756,4 +756,181 @@ export class Observer {
     // The actual data is returned in ProcessingResult.seekingHelpPosts
     return [];
   }
+
+  // ==========================================================================
+  // Thoughtful Commentary - Finding Interesting Posts
+  // ==========================================================================
+
+  /**
+   * Find an interesting post to comment on with a thoughtful take
+   * Criteria: technical depth, philosophical questions, creative projects, active discussion
+   * Excludes: intro posts, simple help requests, posts we've already engaged with
+   */
+  findInterestingPost(posts: MoltbookPost[]): MoltbookPost | null {
+    const scoredPosts: Array<{ post: MoltbookPost; score: number }> = [];
+
+    for (const post of posts) {
+      // Skip if we've already engaged with this post
+      if (this.db.hasEngagedWithPost(post.id)) {
+        continue;
+      }
+
+      // Skip intro posts
+      const lowerContent = `${post.title} ${post.content}`.toLowerCase();
+      if (this.isIntroPost(lowerContent)) {
+        continue;
+      }
+
+      // Skip simple help requests (these should get reactive matching instead)
+      if (this.isSimpleHelpRequest(lowerContent)) {
+        continue;
+      }
+
+      // Calculate interest score
+      const score = this.calculateInterestScore(post, lowerContent);
+
+      // Only include posts with meaningful interest scores
+      if (score >= 0.4) {
+        scoredPosts.push({ post, score });
+      }
+    }
+
+    // Sort by score descending and return the most interesting
+    scoredPosts.sort((a, b) => b.score - a.score);
+
+    if (scoredPosts.length === 0) {
+      return null;
+    }
+
+    logger.debug('interesting_posts_found', {
+      count: scoredPosts.length,
+      topScore: scoredPosts[0].score,
+      topPostId: scoredPosts[0].post.id,
+    });
+
+    return scoredPosts[0].post;
+  }
+
+  /**
+   * Check if a post looks like an introduction
+   */
+  private isIntroPost(content: string): boolean {
+    const introSignals = [
+      'hello',
+      'hi everyone',
+      "i'm new",
+      'just joined',
+      'introduction',
+      'first post',
+      'nice to meet',
+      'looking forward to',
+      'excited to be here',
+    ];
+    return introSignals.some(signal => content.includes(signal));
+  }
+
+  /**
+   * Check if a post is a simple help request (better suited for reactive matching)
+   */
+  private isSimpleHelpRequest(content: string): boolean {
+    const simpleHelpSignals = [
+      'can anyone help',
+      'need help with',
+      'stuck on',
+      'how do i',
+      'quick question',
+      'simple question',
+    ];
+
+    // Count how many help signals are present
+    let helpSignalCount = 0;
+    for (const signal of simpleHelpSignals) {
+      if (content.includes(signal)) {
+        helpSignalCount++;
+      }
+    }
+
+    // If multiple help signals and short content, it's a simple help request
+    return helpSignalCount >= 1 && content.length < 500;
+  }
+
+  /**
+   * Calculate how interesting a post is for thoughtful commentary
+   */
+  private calculateInterestScore(post: MoltbookPost, lowerContent: string): number {
+    let score = 0;
+
+    // Technical depth signals (substantial code, technical terms)
+    const technicalSignals = [
+      'algorithm', 'architecture', 'implementation', 'optimization',
+      'trade-off', 'design pattern', 'refactor', 'scalab',
+      'performance', 'concurrent', 'async', 'distributed',
+    ];
+    for (const signal of technicalSignals) {
+      if (lowerContent.includes(signal)) {
+        score += 0.15;
+      }
+    }
+
+    // Philosophical/thought-provoking signals
+    const philosophicalSignals = [
+      'what if', 'should we', 'is it ethical', 'future of',
+      'implications', 'fundamental', 'paradigm', 'consciousness',
+      'emerge', 'meaning', 'purpose', 'believe',
+    ];
+    for (const signal of philosophicalSignals) {
+      if (lowerContent.includes(signal)) {
+        score += 0.2;
+      }
+    }
+
+    // Creative project signals
+    const creativeSignals = [
+      'built', 'created', 'developed', 'launched', 'project',
+      'experiment', 'prototype', 'demo', 'showcase',
+    ];
+    for (const signal of creativeSignals) {
+      if (lowerContent.includes(signal)) {
+        score += 0.15;
+      }
+    }
+
+    // Discussion/debate potential
+    const discussionSignals = [
+      'thoughts on', 'opinion', 'debate', 'controversial',
+      'unpopular', 'perspective', 'what do you think',
+    ];
+    for (const signal of discussionSignals) {
+      if (lowerContent.includes(signal)) {
+        score += 0.2;
+      }
+    }
+
+    // Engagement signals (posts with active discussion)
+    if (post.comment_count >= 5) {
+      score += 0.15;
+    }
+    if (post.upvotes >= 10) {
+      score += 0.1;
+    }
+
+    // Content length bonus (substantial posts are more interesting)
+    if (post.content.length >= 1000) {
+      score += 0.15;
+    } else if (post.content.length >= 500) {
+      score += 0.1;
+    }
+
+    // Reduce score for posts that are too old (prefer recent content)
+    const postAge = Date.now() - new Date(post.created_at).getTime();
+    const hoursOld = postAge / (1000 * 60 * 60);
+    if (hoursOld > 48) {
+      score *= 0.7;
+    } else if (hoursOld > 24) {
+      score *= 0.85;
+    }
+
+    // Cap at 1.0
+    return Math.min(1, score);
+  }
 }

@@ -36,7 +36,7 @@ export interface PostNotification {
 }
 
 export interface CommentNotification {
-  type: 'welcome' | 'reactive_match' | 'match_request_response' | 'match_notification';
+  type: 'welcome' | 'reactive_match' | 'match_request_response' | 'match_notification' | 'thoughtful_comment';
   postId: string;
   commentId: string;
   recipientName: string;
@@ -248,6 +248,7 @@ export class TelegramNotifier {
       reactive_match: '💡',
       match_request_response: '🎯',
       match_notification: '🔔',
+      thoughtful_comment: '💭',
     }[data.type] || '💬';
 
     const typeName = {
@@ -255,6 +256,7 @@ export class TelegramNotifier {
       reactive_match: 'Reactive Match Suggestion',
       match_request_response: 'Match Request Response',
       match_notification: 'Match Notification',
+      thoughtful_comment: 'Thoughtful Commentary',
     }[data.type] || 'Comment';
 
     const lines = [

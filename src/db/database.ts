@@ -1154,4 +1154,30 @@ export class MatchmakerDatabase {
 
     return row?.karma ?? null;
   }
+
+  // ==========================================================================
+  // Thoughtful Commentary Tracking
+  // ==========================================================================
+
+  /**
+   * Check if we've already engaged with a post (via thoughtful commentary)
+   */
+  hasEngagedWithPost(postId: string): boolean {
+    const row = this.db
+      .prepare(`SELECT 1 FROM engaged_posts WHERE post_id = ?`)
+      .get(postId);
+    return !!row;
+  }
+
+  /**
+   * Mark a post as engaged (after posting a thoughtful comment)
+   */
+  markPostEngaged(postId: string, commentId: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO engaged_posts (post_id, comment_id)
+         VALUES (?, ?)`
+      )
+      .run(postId, commentId);
+  }
 }

@@ -470,3 +470,15 @@ CREATE TABLE IF NOT EXISTS karma_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_karma_recorded ON karma_history(recorded_at DESC);
+
+-- ============================================================================
+-- Engaged Posts (for thoughtful commentary tracking)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS engaged_posts (
+    post_id TEXT PRIMARY KEY,
+    comment_id TEXT,
+    engaged_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_engaged_posts_date ON engaged_posts(engaged_at DESC);

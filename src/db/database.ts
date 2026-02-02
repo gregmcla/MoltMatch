@@ -61,6 +61,13 @@ export class MatchmakerDatabase {
     logger.info('database_closed');
   }
 
+  /**
+   * Get the underlying database connection (for advanced operations)
+   */
+  getDb(): Database.Database {
+    return this.db;
+  }
+
   // ==========================================================================
   // Agent Operations
   // ==========================================================================

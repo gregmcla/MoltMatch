@@ -16,12 +16,25 @@ import { Matcher } from './matching/matcher.js';
 import { RateLimiter } from './publishing/rate-limiter.js';
 import { Publisher } from './publishing/publisher.js';
 import { TemplateEngine } from './templates/template-engine.js';
+import {
+  ReflectionStore,
+  Reflector,
+  Consolidator,
+  PrincipleLoader,
+  DEFAULT_LEARNING_CONFIG,
+  type HeartbeatSummary,
+  type ReflectionContext,
+  type Reflection,
+  type ConsolidationResult,
+  type LearningConfig,
+} from './learning/index.js';
 import type { Match } from './types.js';
 
 const logger = createLogger('main');
 registerLogger(logger);
 
 export interface HeartbeatResult {
+  id: string;
   success: boolean;
   duration: number;
   observation: {
@@ -32,10 +45,23 @@ export interface HeartbeatResult {
   matching: {
     gapsProcessed: number;
     matchesCreated: number;
+    matchDetails: Array<{
+      id: string;
+      seekerId: string;
+      helperId: string;
+      domain: string;
+      confidence: number;
+      rationale: string;
+    }>;
   };
   publishing: {
     itemsPublished: number;
     itemsFailed: number;
+  };
+  learning?: {
+    reflected: boolean;
+    consolidated: boolean;
+    reflectionId?: string;
   };
   errors: string[];
 }
@@ -52,6 +78,15 @@ export class Matchmaker {
   private templateEngine: TemplateEngine;
   private initialized = false;
   private vectorStoreEnabled = false;
+
+  // Learning system components
+  private reflectionStore: ReflectionStore | null = null;
+  private reflector: Reflector | null = null;
+  private consolidator: Consolidator | null = null;
+  private principleLoader: PrincipleLoader | null = null;
+  private learningEnabled = false;
+  private learningConfig: LearningConfig = DEFAULT_LEARNING_CONFIG;
+  private newDomainsThisCycle: string[] = [];
 
   constructor() {
     // Set log level
@@ -125,6 +160,43 @@ export class Matchmaker {
       weights: config.matching.weights,
     });
 
+    // Initialize learning system
+    try {
+      const dataDir = dirname(config.database.sqlitePath);
+      this.reflectionStore = new ReflectionStore(this.db, dataDir, this.learningConfig);
+      this.reflector = new Reflector(
+        this.reflectionStore,
+        config.anthropic.apiKey,
+        this.learningConfig
+      );
+      this.consolidator = new Consolidator(
+        this.reflectionStore,
+        config.anthropic.apiKey,
+        this.learningConfig
+      );
+      this.principleLoader = new PrincipleLoader(this.reflectionStore);
+
+      // Load and inject principles
+      this.principleLoader.loadActivePrinciples();
+      const matchingPrinciples = this.principleLoader.generateMatchingPrinciples();
+      const extractionPrinciples = this.principleLoader.generateExtractionPrinciples();
+
+      this.extractor.setLearnedPrinciples(extractionPrinciples);
+      this.matcher.setLearnedPrinciples(matchingPrinciples);
+      this.reflector.setCurrentPrinciples(this.principleLoader.generateAllPrinciplesSummary());
+
+      this.learningEnabled = true;
+      logger.info('learning_system_initialized', {
+        principles: this.principleLoader.getStats().total,
+      });
+    } catch (error) {
+      logger.warn('learning_system_disabled', {
+        reason: 'Failed to initialize learning components',
+        error: (error as Error).message,
+      });
+      this.learningEnabled = false;
+    }
+
     // Verify API connection
     const healthy = await this.client.healthCheck();
     if (!healthy) {
@@ -132,7 +204,10 @@ export class Matchmaker {
     }
 
     this.initialized = true;
-    logger.info('matchmaker_initialized', { vectorStoreEnabled: this.vectorStoreEnabled });
+    logger.info('matchmaker_initialized', {
+      vectorStoreEnabled: this.vectorStoreEnabled,
+      learningEnabled: this.learningEnabled,
+    });
   }
 
   /**
@@ -145,16 +220,22 @@ export class Matchmaker {
       await this.initialize();
     }
 
-    logger.info('heartbeat_started');
+    const heartbeatId = `hb_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    logger.info('heartbeat_started', { heartbeatId });
 
     const result: HeartbeatResult = {
+      id: heartbeatId,
       success: true,
       duration: 0,
       observation: { postsProcessed: 0, signalsExtracted: 0, gapsCreated: 0 },
-      matching: { gapsProcessed: 0, matchesCreated: 0 },
+      matching: { gapsProcessed: 0, matchesCreated: 0, matchDetails: [] },
       publishing: { itemsPublished: 0, itemsFailed: 0 },
+      learning: { reflected: false, consolidated: false },
       errors: [],
     };
+
+    // Reset new domains tracking
+    this.newDomainsThisCycle = [];
 
     try {
       // Phase 1: Observe
@@ -187,6 +268,16 @@ export class Matchmaker {
             const match = this.matcher!.createMatch(seeker, candidates[0], gap);
             result.matching.matchesCreated++;
 
+            // Track match details for learning
+            result.matching.matchDetails.push({
+              id: match.id,
+              seekerId: match.seekerId,
+              helperId: match.helperId,
+              domain: match.capabilityDomain,
+              confidence: match.confidence,
+              rationale: match.rationale,
+            });
+
             // Try to publish immediately
             const helper = this.db.getAgent(candidates[0].agent.id);
             if (helper) {
@@ -208,7 +299,10 @@ export class Matchmaker {
           }
         }
       }
-      logger.info('phase_match_complete', result.matching);
+      logger.info('phase_match_complete', {
+        gapsProcessed: result.matching.gapsProcessed,
+        matchesCreated: result.matching.matchesCreated,
+      });
     } catch (error) {
       const msg = `Matching failed: ${(error as Error).message}`;
       result.errors.push(msg);
@@ -232,6 +326,12 @@ export class Matchmaker {
       // Phase 4: Maintenance
       logger.info('phase_maintenance_start');
       await this.observer!.runMaintenance();
+
+      // Learning system maintenance (decay, cleanup)
+      if (this.learningEnabled && this.consolidator) {
+        this.consolidator.runDecay();
+        this.consolidator.runCleanup();
+      }
       logger.info('phase_maintenance_complete');
     } catch (error) {
       const msg = `Maintenance failed: ${(error as Error).message}`;
@@ -239,8 +339,81 @@ export class Matchmaker {
       logger.error('phase_maintenance_error', { error: msg });
     }
 
+    // Phase 5: Learning (reflection and consolidation)
+    if (this.learningEnabled && this.reflector && this.consolidator && this.reflectionStore) {
+      try {
+        logger.info('phase_learning_start');
+
+        // Increment heartbeat counter
+        this.reflectionStore.incrementHeartbeatCount();
+
+        // Build heartbeat summary for reflection
+        const summary: HeartbeatSummary = {
+          id: heartbeatId,
+          postsProcessed: result.observation.postsProcessed,
+          signalsExtracted: result.observation.signalsExtracted,
+          gapsCreated: result.observation.gapsCreated,
+          matchesFound: result.matching.matchesCreated,
+          matchesPublished: result.publishing.itemsPublished,
+          errors: result.errors,
+          durationMs: Date.now() - startTime,
+          newDomains: this.newDomainsThisCycle,
+        };
+
+        // Build reflection context
+        const context = this.buildReflectionContext(result);
+
+        // Check if we should reflect
+        const shouldReflect = this.reflector.shouldReflect(summary, context);
+
+        if (shouldReflect.should) {
+          logger.info('reflection_triggered', {
+            trigger: shouldReflect.trigger,
+            score: shouldReflect.score,
+          });
+
+          const reflection = await this.reflector.reflect(
+            heartbeatId,
+            summary,
+            context,
+            shouldReflect.trigger
+          );
+
+          result.learning = {
+            reflected: true,
+            consolidated: false,
+            reflectionId: reflection.id,
+          };
+        }
+
+        // Check if we should consolidate
+        if (this.consolidator.shouldConsolidate()) {
+          logger.info('consolidation_triggered');
+          await this.consolidator.consolidate();
+          result.learning!.consolidated = true;
+
+          // Reload principles after consolidation
+          if (this.principleLoader) {
+            this.principleLoader.reload();
+            const matchingPrinciples = this.principleLoader.generateMatchingPrinciples();
+            const extractionPrinciples = this.principleLoader.generateExtractionPrinciples();
+            this.extractor.setLearnedPrinciples(extractionPrinciples);
+            this.matcher!.setLearnedPrinciples(matchingPrinciples);
+            this.reflector.setCurrentPrinciples(this.principleLoader.generateAllPrinciplesSummary());
+          }
+        }
+
+        logger.info('phase_learning_complete', result.learning);
+      } catch (error) {
+        const msg = `Learning failed: ${(error as Error).message}`;
+        result.errors.push(msg);
+        logger.error('phase_learning_error', { error: msg });
+        // Learning failures shouldn't mark heartbeat as failed
+      }
+    }
+
     result.duration = Date.now() - startTime;
-    result.success = result.errors.length === 0;
+    result.success = result.errors.filter(e => !e.startsWith('Learning')).length === 0;
 
     logger.info('heartbeat_complete', {
       success: result.success,
@@ -293,6 +466,123 @@ export class Matchmaker {
     }
 
     await this.publisher.publishWeeklyDigest();
+  }
+
+  /**
+   * Force a reflection regardless of notability
+   */
+  async forceReflect(): Promise<Reflection | null> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    if (!this.learningEnabled || !this.reflector || !this.reflectionStore) {
+      logger.warn('force_reflect_skipped', { reason: 'Learning system not enabled' });
+      return null;
+    }
+
+    const heartbeatId = `manual_${Date.now()}`;
+    const summary: HeartbeatSummary = {
+      id: heartbeatId,
+      postsProcessed: 0,
+      signalsExtracted: 0,
+      gapsCreated: 0,
+      matchesFound: 0,
+      matchesPublished: 0,
+      errors: [],
+      durationMs: 0,
+      newDomains: [],
+    };
+
+    const context = this.buildReflectionContext({
+      id: heartbeatId,
+      success: true,
+      duration: 0,
+      observation: { postsProcessed: 0, signalsExtracted: 0, gapsCreated: 0 },
+      matching: { gapsProcessed: 0, matchesCreated: 0, matchDetails: [] },
+      publishing: { itemsPublished: 0, itemsFailed: 0 },
+      errors: [],
+    });
+
+    return this.reflector.forceReflect(heartbeatId, summary, context);
+  }
+
+  /**
+   * Force consolidation regardless of thresholds
+   */
+  async forceConsolidate(): Promise<ConsolidationResult | null> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    if (!this.learningEnabled || !this.consolidator) {
+      logger.warn('force_consolidate_skipped', { reason: 'Learning system not enabled' });
+      return null;
+    }
+
+    const result = await this.consolidator.forceConsolidate();
+
+    // Reload principles after consolidation
+    if (this.principleLoader && this.reflector) {
+      this.principleLoader.reload();
+      const matchingPrinciples = this.principleLoader.generateMatchingPrinciples();
+      const extractionPrinciples = this.principleLoader.generateExtractionPrinciples();
+      this.extractor.setLearnedPrinciples(extractionPrinciples);
+      this.matcher!.setLearnedPrinciples(matchingPrinciples);
+      this.reflector.setCurrentPrinciples(this.principleLoader.generateAllPrinciplesSummary());
+    }
+
+    return result;
+  }
+
+  /**
+   * Build reflection context from heartbeat result
+   */
+  private buildReflectionContext(result: HeartbeatResult): ReflectionContext {
+    // Get match statistics
+    const matchStats = this.matcher!.getStats();
+
+    // Get top domains from recent matches
+    const topDomains = this.matcher!.getTopDomains?.(5) || [];
+
+    return {
+      matchConfidences: result.matching.matchDetails.map(m => m.confidence),
+      matchDetails: result.matching.matchDetails,
+      newDomainsCount: this.newDomainsThisCycle.length,
+      avgConfidenceLast7Days: matchStats.avgConfidence || 0.7,
+      acceptanceRateLast30Days: matchStats.acceptanceRate || 0,
+      topDomains,
+      recentErrors: result.errors.slice(0, 5),
+    };
+  }
+
+  /**
+   * Get learning system statistics
+   */
+  getLearningStats(): {
+    enabled: boolean;
+    reflections: number;
+    insights: number;
+    principles: number;
+    lastReflection: Date | null;
+    lastConsolidation: Date | null;
+  } | null {
+    if (!this.learningEnabled || !this.reflector || !this.consolidator) {
+      return null;
+    }
+
+    const reflectorStats = this.reflector.getStats();
+    const consolidatorStats = this.consolidator.getStats();
+    const principleStats = this.principleLoader?.getStats();
+
+    return {
+      enabled: true,
+      reflections: reflectorStats.totalReflections,
+      insights: consolidatorStats.totalInsights,
+      principles: principleStats?.total || 0,
+      lastReflection: reflectorStats.lastReflection,
+      lastConsolidation: consolidatorStats.lastConsolidation,
+    };
   }
 
   /**

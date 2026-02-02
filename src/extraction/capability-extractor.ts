@@ -61,9 +61,17 @@ Write 1-2 sentences describing what this agent can do or knows about. Focus on s
 
 export class CapabilityExtractor {
   private client: Anthropic;
+  private learnedPrinciples: string = '';
 
   constructor(apiKey: string) {
     this.client = new Anthropic({ apiKey });
+  }
+
+  /**
+   * Set learned principles for prompt injection
+   */
+  setLearnedPrinciples(principles: string): void {
+    this.learnedPrinciples = principles;
   }
 
   /**
@@ -73,11 +81,16 @@ export class CapabilityExtractor {
     const startTime = Date.now();
 
     try {
-      // Build the prompt
-      const prompt = EXTRACTION_PROMPT
+      // Build the prompt with optional learned principles
+      let prompt = EXTRACTION_PROMPT
         .replace('{{author}}', post.author_name || post.author_id)
         .replace('{{title}}', post.title)
         .replace('{{content}}', post.content);
+
+      // Inject learned principles if available
+      if (this.learnedPrinciples) {
+        prompt = prompt + '\n' + this.learnedPrinciples;
+      }
 
       const response = await this.client.messages.create({
         model: EXTRACTION_MODEL,

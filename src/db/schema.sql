@@ -209,6 +209,107 @@ CREATE TABLE IF NOT EXISTS publish_queue (
 CREATE INDEX IF NOT EXISTS idx_queue_status_priority ON publish_queue(status, priority, scheduled_for);
 
 -- ============================================================================
+-- Learning: Reflections
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS reflections (
+    id TEXT PRIMARY KEY,
+    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    trigger TEXT NOT NULL,
+    heartbeat_id TEXT,
+    summary TEXT NOT NULL,
+    what_worked_well TEXT,      -- JSON array
+    what_surprised TEXT,         -- JSON array
+    what_would_do_differently TEXT, -- JSON array
+    pattern_observations TEXT,   -- JSON array
+    match_assessments TEXT,      -- JSON array
+    extraction_notes TEXT,       -- JSON array
+    confidence REAL DEFAULT 0.7,
+    tags TEXT,                   -- JSON array
+    file_path TEXT,              -- Path to YAML file
+    consolidated_into TEXT,      -- Links to insight that consumed this
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_reflections_timestamp ON reflections(timestamp);
+CREATE INDEX IF NOT EXISTS idx_reflections_trigger ON reflections(trigger);
+CREATE INDEX IF NOT EXISTS idx_reflections_consolidated ON reflections(consolidated_into);
+
+-- ============================================================================
+-- Learning: Pattern Observations (extracted from reflections)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS pattern_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reflection_id TEXT NOT NULL REFERENCES reflections(id) ON DELETE CASCADE,
+    pattern TEXT NOT NULL,
+    frequency TEXT NOT NULL,
+    domain TEXT,
+    actionable BOOLEAN DEFAULT FALSE,
+    suggested_action TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_patterns_domain ON pattern_observations(domain);
+CREATE INDEX IF NOT EXISTS idx_patterns_actionable ON pattern_observations(actionable);
+
+-- ============================================================================
+-- Learning: Insights (consolidated from reflections)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS insights (
+    id TEXT PRIMARY KEY,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    source_reflection_ids TEXT NOT NULL,  -- JSON array
+    category TEXT NOT NULL,               -- 'matching', 'extraction', 'patterns', 'publishing', 'quality'
+    insight_text TEXT NOT NULL,
+    strength REAL DEFAULT 0.5,
+    action_taken BOOLEAN DEFAULT FALSE,
+    promoted_to_principle BOOLEAN DEFAULT FALSE,
+    last_referenced DATETIME
+);
+
+CREATE INDEX IF NOT EXISTS idx_insights_category ON insights(category);
+CREATE INDEX IF NOT EXISTS idx_insights_strength ON insights(strength);
+CREATE INDEX IF NOT EXISTS idx_insights_promoted ON insights(promoted_to_principle);
+
+-- ============================================================================
+-- Learning: Principles (promoted from insights)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS principles (
+    id TEXT PRIMARY KEY,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    source_insight_ids TEXT NOT NULL,     -- JSON array
+    category TEXT NOT NULL,               -- 'matching', 'extraction', 'publishing', 'general'
+    principle_text TEXT NOT NULL,
+    weight REAL DEFAULT 1.0,
+    active BOOLEAN DEFAULT TRUE,
+    validation_count INTEGER DEFAULT 0,
+    invalidation_count INTEGER DEFAULT 0,
+    last_validated DATETIME
+);
+
+CREATE INDEX IF NOT EXISTS idx_principles_category ON principles(category);
+CREATE INDEX IF NOT EXISTS idx_principles_active ON principles(active);
+CREATE INDEX IF NOT EXISTS idx_principles_weight ON principles(weight DESC);
+
+-- ============================================================================
+-- Learning: Heartbeat Counter (for milestone reflections)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS learning_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    heartbeat_count INTEGER DEFAULT 0,
+    last_consolidation DATETIME,
+    last_reflection DATETIME,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO learning_state (id) VALUES (1);
+
+-- ============================================================================
 -- Triggers for updated_at
 -- ============================================================================
 
@@ -241,4 +342,16 @@ CREATE TRIGGER IF NOT EXISTS rate_limit_state_updated_at
     AFTER UPDATE ON rate_limit_state
     BEGIN
         UPDATE rate_limit_state SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+    END;
+
+CREATE TRIGGER IF NOT EXISTS principles_updated_at
+    AFTER UPDATE ON principles
+    BEGIN
+        UPDATE principles SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+    END;
+
+CREATE TRIGGER IF NOT EXISTS learning_state_updated_at
+    AFTER UPDATE ON learning_state
+    BEGIN
+        UPDATE learning_state SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
     END;

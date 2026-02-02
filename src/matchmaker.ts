@@ -16,6 +16,7 @@ import { Matcher } from './matching/matcher.js';
 import { RateLimiter } from './publishing/rate-limiter.js';
 import { Publisher } from './publishing/publisher.js';
 import { TemplateEngine } from './templates/template-engine.js';
+import { FallbackPostGenerator, type ObservationSummary } from './publishing/fallback-posts.js';
 import {
   ReflectionStore,
   Reflector,
@@ -88,6 +89,10 @@ export class Matchmaker {
   private learningConfig: LearningConfig = DEFAULT_LEARNING_CONFIG;
   private newDomainsThisCycle: string[] = [];
 
+  // Fallback post generator
+  private fallbackPostGenerator: FallbackPostGenerator;
+  private lastObservationSummary: ObservationSummary | null = null;
+
   constructor() {
     // Set log level
     setGlobalLogLevel(config.logLevel);
@@ -114,6 +119,8 @@ export class Matchmaker {
       this.rateLimiter,
       this.templateEngine
     );
+
+    this.fallbackPostGenerator = new FallbackPostGenerator(config.anthropic.apiKey);
   }
 
   /**
@@ -255,6 +262,16 @@ export class Matchmaker {
         signalsExtracted: observeResult.signalsExtracted,
         gapsCreated: observeResult.gapsCreated,
       };
+
+      // Store observation summary for potential fallback post
+      this.lastObservationSummary = {
+        postsScanned: observeResult.postsProcessed,
+        agentsSeen: observeResult.uniqueAgentsSeen.size,
+        domainsDiscovered: observeResult.newDomains,
+        helpRequestsFound: observeResult.helpRequestsFound,
+        notablePosts: observeResult.notablePosts,
+      };
+
       logger.info('phase_observe_complete', result.observation);
 
       // Welcome new agents after observation
@@ -315,6 +332,39 @@ export class Matchmaker {
         gapsProcessed: result.matching.gapsProcessed,
         matchesCreated: result.matching.matchesCreated,
       });
+
+      // If no matches were created, generate a fallback post
+      if (result.matching.matchesCreated === 0 && this.lastObservationSummary) {
+        try {
+          logger.info('fallback_post_start', { reason: 'no_matches_found' });
+          const fallbackPost = await this.fallbackPostGenerator.generatePost(this.lastObservationSummary);
+
+          if (fallbackPost) {
+            // Publish the fallback post
+            const publishResult = await this.client.createPost({
+              submolt: fallbackPost.submolt,
+              title: fallbackPost.title,
+              content: fallbackPost.content,
+            });
+
+            if (publishResult.success) {
+              result.publishing.itemsPublished++;
+              logger.info('fallback_post_published', {
+                type: fallbackPost.type,
+                title: fallbackPost.title,
+              });
+            } else {
+              logger.warn('fallback_post_publish_failed', {
+                error: publishResult.error,
+              });
+            }
+          }
+        } catch (fallbackError) {
+          logger.error('fallback_post_error', {
+            error: (fallbackError as Error).message,
+          });
+        }
+      }
     } catch (error) {
       const msg = `Matching failed: ${(error as Error).message}`;
       result.errors.push(msg);

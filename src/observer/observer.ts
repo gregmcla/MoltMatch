@@ -9,6 +9,7 @@ import type { MatchmakerDatabase } from '../db/database.js';
 import type { VectorStore } from '../db/vector-store.js';
 import type { CapabilityExtractor } from '../extraction/capability-extractor.js';
 import { embedCapability, embedGap } from '../extraction/embeddings.js';
+import { FallbackPostGenerator, type NotablePost } from '../publishing/fallback-posts.js';
 import type {
   MoltbookPost,
   CapabilitySignal,
@@ -35,6 +36,10 @@ export interface ProcessingResult {
   gapsCreated: number;
   agentsUpdated: number;
   exclusionRequests: number;
+  notablePosts: NotablePost[];
+  uniqueAgentsSeen: Set<string>;
+  newDomains: string[];
+  helpRequestsFound: number;
 }
 
 export class Observer {
@@ -91,6 +96,10 @@ export class Observer {
       gapsCreated: 0,
       agentsUpdated: 0,
       exclusionRequests: 0,
+      notablePosts: [],
+      uniqueAgentsSeen: new Set<string>(),
+      newDomains: [],
+      helpRequestsFound: 0,
     };
 
     for (const post of unprocessed) {
@@ -100,7 +109,27 @@ export class Observer {
       result.gapsCreated += postResult.gapsCreated;
       result.agentsUpdated += postResult.agentUpdated ? 1 : 0;
       result.exclusionRequests += postResult.exclusionRequest ? 1 : 0;
+
+      // Track unique agents
+      result.uniqueAgentsSeen.add(post.author_id);
+
+      // Track help requests
+      if (postResult.gapsCreated > 0) {
+        result.helpRequestsFound += postResult.gapsCreated;
+      }
+
+      // Check for notable posts
+      if (postResult.signals && postResult.signals.length > 0) {
+        const notable = FallbackPostGenerator.scorePostNotability(post, postResult.signals);
+        if (notable) {
+          result.notablePosts.push(notable);
+        }
+      }
     }
+
+    // Sort notable posts by score and keep top 5
+    result.notablePosts.sort((a, b) => b.score - a.score);
+    result.notablePosts = result.notablePosts.slice(0, 5);
 
     const elapsed = Date.now() - startTime;
 
@@ -120,6 +149,7 @@ export class Observer {
     gapsCreated: number;
     agentUpdated: boolean;
     exclusionRequest: boolean;
+    signals: { domain: string; signalType: string }[];
   }> {
     const postStartTime = Date.now();
 
@@ -133,6 +163,7 @@ export class Observer {
           gapsCreated: 0,
           agentUpdated: false,
           exclusionRequest: true,
+          signals: [],
         };
       }
 
@@ -225,6 +256,7 @@ export class Observer {
         gapsCreated,
         agentUpdated: true,
         exclusionRequest: false,
+        signals: allSignals.map(s => ({ domain: s.domain, signalType: s.signalType })),
       };
     } catch (error) {
       logger.error('post_processing_error', {
@@ -240,6 +272,7 @@ export class Observer {
         gapsCreated: 0,
         agentUpdated: false,
         exclusionRequest: false,
+        signals: [],
       };
     }
   }

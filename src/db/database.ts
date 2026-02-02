@@ -81,30 +81,40 @@ export class MatchmakerDatabase {
   }
 
   upsertAgent(agent: Partial<AgentProfile> & { id: string; name: string }): void {
-    this.db
-      .prepare(
-        `INSERT INTO agents (id, name, base_model, first_seen, last_active, karma)
-         VALUES (@id, @name, @baseModel, @firstSeen, @lastActive, @karma)
-         ON CONFLICT(id) DO UPDATE SET
-           name = COALESCE(@name, name),
-           base_model = COALESCE(@baseModel, base_model),
-           last_active = COALESCE(@lastActive, last_active),
-           karma = COALESCE(@karma, karma)`
-      )
-      .run({
-        id: agent.id,
-        name: agent.name,
-        baseModel: agent.baseModel || 'unknown',
-        firstSeen: agent.firstSeen?.toISOString() || new Date().toISOString(),
-        lastActive: agent.lastActive?.toISOString() || new Date().toISOString(),
-        karma: agent.karma || 0,
-      });
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO agents (id, name, base_model, first_seen, last_active, karma)
+           VALUES (@id, @name, @baseModel, @firstSeen, @lastActive, @karma)
+           ON CONFLICT(id) DO UPDATE SET
+             name = COALESCE(@name, name),
+             base_model = COALESCE(@baseModel, base_model),
+             last_active = COALESCE(@lastActive, last_active),
+             karma = COALESCE(@karma, karma)`
+        )
+        .run({
+          id: agent.id,
+          name: agent.name,
+          baseModel: agent.baseModel || 'unknown',
+          firstSeen: agent.firstSeen?.toISOString() || new Date().toISOString(),
+          lastActive: agent.lastActive?.toISOString() || new Date().toISOString(),
+          karma: agent.karma || 0,
+        });
+    } catch (error) {
+      logger.error('upsertAgent_failed', { agent, error: (error as Error).message });
+      throw error;
+    }
   }
 
   incrementAgentPostCount(agentId: string): void {
-    this.db
-      .prepare('UPDATE agents SET post_count = post_count + 1 WHERE id = ?')
-      .run(agentId);
+    try {
+      this.db
+        .prepare('UPDATE agents SET post_count = post_count + 1 WHERE id = ?')
+        .run(agentId);
+    } catch (error) {
+      logger.error('incrementAgentPostCount_failed', { agentId, error: (error as Error).message });
+      throw error;
+    }
   }
 
   incrementAgentCommentCount(agentId: string): void {
@@ -187,44 +197,49 @@ export class MatchmakerDatabase {
   }
 
   upsertCapability(signal: CapabilitySignal, agentId: string): number {
-    const existing = this.getCapability(agentId, signal.domain);
+    try {
+      const existing = this.getCapability(agentId, signal.domain);
 
-    if (existing) {
-      // Update existing capability
-      const newConfidence = this.calculateNewConfidence(existing, signal);
-      const incrementColumn = this.getSignalTypeColumn(signal.signalType);
+      if (existing) {
+        // Update existing capability
+        const newConfidence = this.calculateNewConfidence(existing, signal);
+        const incrementColumn = this.getSignalTypeColumn(signal.signalType);
 
-      this.db
-        .prepare(
-          `UPDATE capabilities
-           SET confidence = ?,
-               signal_count = signal_count + 1,
-               ${incrementColumn} = ${incrementColumn} + 1,
-               last_observed = CURRENT_TIMESTAMP
-           WHERE id = ?`
-        )
-        .run(newConfidence, existing.id);
+        this.db
+          .prepare(
+            `UPDATE capabilities
+             SET confidence = ?,
+                 signal_count = signal_count + 1,
+                 ${incrementColumn} = ${incrementColumn} + 1,
+                 last_observed = CURRENT_TIMESTAMP
+             WHERE id = ?`
+          )
+          .run(newConfidence, existing.id);
 
-      return existing.id;
-    } else {
-      // Insert new capability
-      const result = this.db
-        .prepare(
-          `INSERT INTO capabilities (agent_id, domain, confidence, signal_count,
-                                     demonstrates_count, claims_count, answers_count,
-                                     first_observed, last_observed)
-           VALUES (?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-        )
-        .run(
-          agentId,
-          signal.domain,
-          signal.confidence,
-          signal.signalType === 'demonstrates' ? 1 : 0,
-          signal.signalType === 'claims' ? 1 : 0,
-          signal.signalType === 'answers' ? 1 : 0
-        );
+        return existing.id;
+      } else {
+        // Insert new capability
+        const result = this.db
+          .prepare(
+            `INSERT INTO capabilities (agent_id, domain, confidence, signal_count,
+                                       demonstrates_count, claims_count, answers_count,
+                                       first_observed, last_observed)
+             VALUES (?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+          )
+          .run(
+            agentId,
+            signal.domain,
+            signal.confidence,
+            signal.signalType === 'demonstrates' ? 1 : 0,
+            signal.signalType === 'claims' ? 1 : 0,
+            signal.signalType === 'answers' ? 1 : 0
+          );
 
-      return Number(result.lastInsertRowid);
+        return Number(result.lastInsertRowid);
+      }
+    } catch (error) {
+      logger.error('upsertCapability_failed', { signal, agentId, error: (error as Error).message });
+      throw error;
     }
   }
 
@@ -236,12 +251,20 @@ export class MatchmakerDatabase {
     postUrl?: string,
     upvotes: number = 0
   ): void {
-    this.db
-      .prepare(
-        `INSERT INTO capability_evidence (capability_id, post_id, post_url, signal_type, evidence_text, upvotes)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .run(capabilityId, postId, postUrl || null, signalType, evidence, upvotes);
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO capability_evidence (capability_id, post_id, post_url, signal_type, evidence_text, upvotes)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(capabilityId, postId, postUrl || null, signalType, evidence, upvotes);
+    } catch (error) {
+      logger.error('addCapabilityEvidence_failed', { 
+        capabilityId, postId, signalType, evidence, postUrl, upvotes,
+        error: (error as Error).message 
+      });
+      throw error;
+    }
   }
 
   findAgentsWithCapability(domain: string, minConfidence: number = 0.5, limit: number = 100): Array<{
@@ -300,21 +323,26 @@ export class MatchmakerDatabase {
   // ==========================================================================
 
   createGap(gap: Omit<CapabilityGap, 'id' | 'createdAt'>): number {
-    const result = this.db
-      .prepare(
-        `INSERT INTO capability_gaps (agent_id, domain, post_id, post_url, urgency, status)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        gap.agentId,
-        gap.domain,
-        gap.postId,
-        gap.postUrl || null,
-        gap.urgency,
-        gap.status
-      );
+    try {
+      const result = this.db
+        .prepare(
+          `INSERT INTO capability_gaps (agent_id, domain, post_id, post_url, urgency, status)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          gap.agentId,
+          gap.domain,
+          gap.postId,
+          gap.postUrl || null,
+          gap.urgency,
+          gap.status
+        );
 
-    return Number(result.lastInsertRowid);
+      return Number(result.lastInsertRowid);
+    } catch (error) {
+      logger.error('createGap_failed', { gap, error: (error as Error).message });
+      throw error;
+    }
   }
 
   getOpenGaps(limit: number = 100): CapabilityGap[] {
@@ -498,12 +526,20 @@ export class MatchmakerDatabase {
     signalsExtracted: number,
     processingTimeMs: number
   ): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO processed_posts (post_id, submolt, extracted_signals, processing_time_ms)
-         VALUES (?, ?, ?, ?)`
-      )
-      .run(postId, submolt, signalsExtracted, processingTimeMs);
+    try {
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO processed_posts (post_id, submolt, extracted_signals, processing_time_ms)
+           VALUES (?, ?, ?, ?)`
+        )
+        .run(postId, submolt, signalsExtracted, processingTimeMs);
+    } catch (error) {
+      logger.error('markPostProcessed_failed', { 
+        postId, submolt, signalsExtracted, processingTimeMs,
+        error: (error as Error).message 
+      });
+      throw error;
+    }
   }
 
   cleanOldProcessedPosts(days: number = 30): number {

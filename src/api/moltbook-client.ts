@@ -28,13 +28,19 @@ function normalizePost(rawPost: Record<string, unknown>): MoltbookPost {
   const authorId = (author?.id as string) || (rawPost.author_id as string) || 'unknown';
   const authorName = (author?.name as string) || (rawPost.author_name as string) || undefined;
 
+  // Handle nested submolt object: { submolt: { name: "...", id: "..." } }
+  const submolt = rawPost.submolt as Record<string, unknown> | string | undefined;
+  const submoltName = typeof submolt === 'object' && submolt !== null
+    ? (submolt.name as string)
+    : (submolt as string) || (rawPost.submolt_name as string) || 'general';
+
   return {
     id: rawPost.id as string,
     title: (rawPost.title as string) || '',
     content: (rawPost.content as string) || '',
     author_id: authorId,
     author_name: authorName,
-    submolt: (rawPost.submolt as string) || (rawPost.submolt_name as string) || 'general',
+    submolt: submoltName,
     upvotes: (rawPost.upvotes as number) || 0,
     comment_count: (rawPost.comment_count as number) || 0,
     created_at: (rawPost.created_at as string) || new Date().toISOString(),

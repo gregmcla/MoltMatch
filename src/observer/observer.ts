@@ -142,22 +142,36 @@ export class Observer {
       }
 
       // Ensure agent exists in database
+      logger.debug('ensuring_agent', { postId: post.id, authorId: post.author_id, authorName: post.author_name });
       await this.ensureAgent(post);
 
       // Check for explicit [SEEKING] and [OFFERING] tags
+      logger.debug('extracting_explicit_signals', { postId: post.id });
       const explicitSignals = this.extractExplicitSignals(post);
 
       // Extract capability signals using LLM
+      logger.debug('extracting_llm_signals', { postId: post.id });
       const llmSignals = await this.extractor.extractFromPost(post);
 
       // Combine signals
       const allSignals = [...explicitSignals, ...llmSignals];
+      logger.debug('signals_extracted', { postId: post.id, count: allSignals.length });
 
       // Process signals
       let gapsCreated = 0;
 
       for (const signal of allSignals) {
-        // Update capability in SQLite
+        // 'asks' signals create gaps, not capabilities
+        if (signal.signalType === 'asks') {
+          const gap = await this.createGap(post, signal);
+          if (gap) {
+            gapsCreated++;
+          }
+          continue;
+        }
+
+        // Update capability in SQLite (for demonstrates/claims/answers)
+        logger.debug('upserting_capability', { postId: post.id, signal });
         const capabilityId = this.db.upsertCapability(signal, post.author_id);
 
         // Add evidence
@@ -170,8 +184,8 @@ export class Observer {
           post.upvotes
         );
 
-        // Generate and store embedding (skip for 'asks' - those go to gaps)
-        if (signal.signalType !== 'asks') {
+        // Generate and store embedding
+        {
           const description = await this.extractor.generateEmbeddingDescription(
             post.author_id,
             signal.domain,
@@ -189,12 +203,6 @@ export class Observer {
               description,
               embedding
             );
-          }
-        } else {
-          // Create capability gap
-          const gap = await this.createGap(post, signal);
-          if (gap) {
-            gapsCreated++;
           }
         }
       }
@@ -347,6 +355,10 @@ export class Observer {
         id: post.author_id,
         name: existing.name !== post.author_id ? existing.name : agentName,
         lastActive: new Date(post.created_at),
+        // Include existing values to satisfy SQL query
+        baseModel: existing.baseModel,
+        firstSeen: existing.firstSeen,
+        karma: existing.karma,
       });
     }
   }

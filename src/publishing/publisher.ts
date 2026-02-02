@@ -4,6 +4,7 @@
  */
 
 import { createLogger, registerLogger } from '../utils/logger.js';
+import { writeMatchPost } from '../utils/ai-writer.js';
 import type { MoltbookClient } from '../api/moltbook-client.js';
 import type { MatchmakerDatabase } from '../db/database.js';
 import type { RateLimiter } from './rate-limiter.js';
@@ -77,30 +78,55 @@ export class Publisher {
       };
     }
 
-    // Render content
-    const content = this.templateEngine.renderMatchIntroduction(
-      match,
-      seeker,
-      helper,
-      helperCapability,
-      gap
-    );
+    // Generate content in SkillLinker's voice
+    let title: string;
+    let body: string;
+    
+    try {
+      const content = await writeMatchPost({
+        seekerName: seeker.name || seeker.id,
+        helperName: helper.name || helper.id,
+        domain: gap.domain,
+        helperEvidence: `demonstrated ${helperCapability.demonstratesCount} times`,
+        confidence: match.confidence,
+      });
+      title = content.title;
+      body = content.body;
+    } catch (error) {
+      logger.error('ai_generation_failed', {
+        error: (error as Error).message,
+        matchId: match.id,
+      });
+      
+      // Fallback to template
+      const content = this.templateEngine.renderMatchIntroduction(
+        match,
+        seeker,
+        helper,
+        helperCapability,
+        gap
+      );
+      title = content.title || 'Match Alert';
+      body = content.body;
+    }
 
     // Publish
     const result = await this.client.createPost({
       submolt,
-      title: content.title || 'Match Alert',
-      content: content.body,
+      title,
+      content: body,
     });
 
     if (result.success && result.data) {
       this.rateLimiter.consumePost();
 
+      const matchPostUrl = `https://www.moltbook.com/post/${result.data.id}`;
+
       // Update match record
       this.db.updateMatchPublished(
         match.id,
         result.data.id,
-        `https://www.moltbook.com/m/${submolt}/posts/${result.data.id}`
+        matchPostUrl
       );
 
       logger.info('match_published', {
@@ -110,10 +136,35 @@ export class Publisher {
         helper: helper.id,
       });
 
+      // ALSO comment on the original seeker's post to notify them
+      if (gap.postId && this.rateLimiter.canComment()) {
+        try {
+          const commentResult = await this.client.createComment({
+            postId: gap.postId,
+            content: `I found a match for you! @${helper.name || helper.id} has ${helperCapability.domain} expertise (demonstrated ${helperCapability.demonstratesCount} times).\n\nFull details: ${matchPostUrl}`,
+          });
+
+          if (commentResult.success) {
+            this.rateLimiter.consumeComment();
+            logger.info('match_notification_commented', {
+              matchId: match.id,
+              commentId: commentResult.data?.id,
+              originalPost: gap.postId,
+            });
+          }
+        } catch (error) {
+          logger.warn('match_notification_comment_failed', {
+            matchId: match.id,
+            error: (error as Error).message,
+          });
+          // Don't fail the whole match if comment fails
+        }
+      }
+
       return {
         success: true,
         postId: result.data.id,
-        postUrl: `https://www.moltbook.com/m/${submolt}/posts/${result.data.id}`,
+        postUrl: matchPostUrl,
       };
     }
 

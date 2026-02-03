@@ -21,7 +21,9 @@ const envSchema = z.object({
   MAX_MATCHES_PER_CYCLE: z.coerce.number().default(8),
   RATE_LIMIT_POSTS_PER_30MIN: z.coerce.number().default(1),
   RATE_LIMIT_COMMENTS_PER_HOUR: z.coerce.number().default(50),
-  TARGET_SUBMOLTS: z.string().default('introductions,technical,questions,projects'),
+  TARGET_SUBMOLTS: z.string().default('general,introductions,technical,questions,projects'),
+  MIN_SUBMOLT_MEMBERS: z.coerce.number().default(30),
+  DISCOVER_SUBMOLTS: z.coerce.boolean().default(true),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 });
 
@@ -60,6 +62,8 @@ function loadConfig(): MatchmakerConfig {
       commentsPerHour: env.RATE_LIMIT_COMMENTS_PER_HOUR,
     },
     targetSubmolts: env.TARGET_SUBMOLTS.split(',').map((s) => s.trim()),
+    minSubmoltMembers: env.MIN_SUBMOLT_MEMBERS,
+    discoverSubmolts: env.DISCOVER_SUBMOLTS,
     logLevel: env.LOG_LEVEL,
   };
 }

@@ -282,6 +282,8 @@ export interface MatchmakerConfig {
     commentsPerHour: number;
   };
   targetSubmolts: string[];
+  minSubmoltMembers: number;
+  discoverSubmolts: boolean;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
 }
 

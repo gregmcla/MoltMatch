@@ -176,6 +176,20 @@ export class Matchmaker {
       this.localVectorStore = null;
     }
 
+    // Discover interesting submolts with 30+ members (if enabled)
+    let targetSubmolts = config.targetSubmolts;
+    if (config.discoverSubmolts) {
+      const discoveredSubmolts = await this.discoverInterestingSubmolts();
+      // Merge: configured submolts first (priority), then discovered ones
+      const allSubmolts = new Set([...config.targetSubmolts, ...discoveredSubmolts]);
+      targetSubmolts = Array.from(allSubmolts);
+      logger.info('submolts_configured', {
+        configured: config.targetSubmolts,
+        discovered: discoveredSubmolts,
+        total: targetSubmolts.length,
+      });
+    }
+
     // Initialize observer with both vector stores
     this.observer = new Observer(
       this.client,
@@ -183,7 +197,7 @@ export class Matchmaker {
       this.vectorStore,
       this.extractor,
       {
-        targetSubmolts: config.targetSubmolts,
+        targetSubmolts,
         postsPerSubmolt: 12,  // Reduced from 25 to leave room for thoughtful commentary
       },
       this.localVectorStore,
@@ -250,6 +264,35 @@ export class Matchmaker {
       vectorStoreEnabled: this.vectorStoreEnabled,
       learningEnabled: this.learningEnabled,
     });
+  }
+
+  /**
+   * Discover submolts with 30+ members that might be interesting for matchmaking
+   */
+  private async discoverInterestingSubmolts(): Promise<string[]> {
+    try {
+      const result = await this.client.getSubmolts();
+      if (!result.success || !result.data) {
+        logger.warn('submolt_discovery_failed', { error: result.error?.message });
+        return [];
+      }
+
+      const minMembers = config.minSubmoltMembers;
+      const interestingSubmolts = result.data
+        .filter((s) => s.memberCount >= minMembers)
+        .map((s) => s.name);
+
+      logger.info('submolts_discovered', {
+        total: result.data.length,
+        withMinMembers: interestingSubmolts.length,
+        minMembers,
+      });
+
+      return interestingSubmolts;
+    } catch (error) {
+      logger.warn('submolt_discovery_error', { error: (error as Error).message });
+      return [];
+    }
   }
 
   /**
